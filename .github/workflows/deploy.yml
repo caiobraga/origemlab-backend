@@ -17,7 +17,9 @@ env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
   ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-  APPRUNNER_SERVICE_ARN: ${{ vars.APPRUNNER_SERVICE_ARN }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+  ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME }}
 
 jobs:
   deploy:
@@ -48,9 +50,51 @@ jobs:
           docker push "$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG"
           echo "IMAGE_URI=$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Update App Runner service
+      - name: Update ECS service (Fargate)
         run: |
-          aws apprunner update-service \
-            --service-arn "${APPRUNNER_SERVICE_ARN}" \
-            --source-configuration "ImageRepository={ImageIdentifier=${IMAGE_URI},ImageRepositoryType=ECR,ImageConfiguration={Port=8080}}"
+          TD_ARN="$(aws ecs describe-services \
+            --cluster "${ECS_CLUSTER}" \
+            --services "${ECS_SERVICE}" \
+            --query 'services[0].taskDefinition' \
+            --output text)"
+          echo "Current task definition: ${TD_ARN}"
+
+          aws ecs describe-task-definition \
+            --task-definition "${TD_ARN}" \
+            --query taskDefinition \
+            --output json > taskdef.json
+
+          python - <<'PY'
+          import json, os
+          td = json.load(open("taskdef.json"))
+          # remove read-only fields
+          for k in [
+            "taskDefinitionArn","revision","status","requiresAttributes","compatibilities",
+            "registeredAt","registeredBy"
+          ]:
+            td.pop(k, None)
+          name = os.environ["ECS_CONTAINER_NAME"]
+          image = os.environ["IMAGE_URI"]
+          updated = False
+          for c in td.get("containerDefinitions", []):
+            if c.get("name") == name:
+              c["image"] = image
+              updated = True
+          if not updated:
+            raise SystemExit(f"Container name not found in task definition: {name}")
+          json.dump(td, open("taskdef.new.json","w"))
+          print("Wrote taskdef.new.json with image:", image)
+          PY
+
+          NEW_TD_ARN="$(aws ecs register-task-definition \
+            --cli-input-json file://taskdef.new.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+          echo "Registered new task definition: ${NEW_TD_ARN}"
+
+          aws ecs update-service \
+            --cluster "${ECS_CLUSTER}" \
+            --service "${ECS_SERVICE}" \
+            --task-definition "${NEW_TD_ARN}" \
+            --force-new-deployment
 

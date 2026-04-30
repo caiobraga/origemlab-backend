@@ -16,12 +16,13 @@ export function corsMiddleware(opts: { allowOrigin: string }) {
     const isAllowed = wildcard || (origin && allow.includes(origin));
 
     // For dev convenience, allow '*' to reflect any Origin.
-    const allowOrigin = wildcard ? origin || "*" : isAllowed ? origin : "";
+    // Important: with credentials, we must NOT return '*'.
+    const allowOrigin = wildcard ? (origin || "") : isAllowed ? origin : "";
 
     if (allowOrigin) {
       res.setHeader("Access-Control-Allow-Origin", allowOrigin);
       res.setHeader("Vary", "Origin");
-      // We don't rely on cookies; still safe to keep this true for OAuth/Stripe redirects in browser flows.
+      // Cookie session requires credentials.
       res.setHeader("Access-Control-Allow-Credentials", "true");
     }
 

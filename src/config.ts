@@ -4,6 +4,10 @@ export type AppConfig = {
   corsAllowOrigin: string;
   /** Base URL do app (front) para redirects do Stripe */
   appBaseUrl: string;
+  auth: {
+    cookieName: string;
+    cookieSecure: boolean;
+  };
   ollama: {
     baseUrl: string;
     model: string;
@@ -12,6 +16,7 @@ export type AppConfig = {
   supabase: {
     url: string | null;
     serviceRoleKey: string | null;
+    anonKey: string | null;
   };
   stripe: {
     secretKey: string | null;
@@ -45,6 +50,9 @@ export function loadConfig(): AppConfig {
   // If empty, the HTTP layer may fall back to request Origin.
   const appBaseUrl = normalizeBaseUrl(readString("APP_BASE_URL") ?? "");
 
+  const cookieName = readString("AUTH_COOKIE_NAME") ?? "origemlab_session";
+  const cookieSecure = (readString("AUTH_COOKIE_SECURE") ?? "").toLowerCase() === "true";
+
   const ollamaBaseUrl = normalizeBaseUrl(readString("OLLAMA_BASE_URL") ?? "http://3.81.132.92:11434");
   const ollamaModel = readString("OLLAMA_MODEL") ?? "qwen2.5:14b";
   const ollamaTimeoutMs = readNumber("OLLAMA_TIMEOUT_MS", 180000);
@@ -52,6 +60,7 @@ export function loadConfig(): AppConfig {
   const supabaseUrl = readString("SUPABASE_URL") ?? readString("VITE_SUPABASE_URL");
   const supabaseServiceRoleKey =
     readString("SUPABASE_SERVICE_ROLE_KEY") ?? readString("VITE_SUPABASE_SERVICE_ROLE_KEY");
+  const supabaseAnonKey = readString("SUPABASE_ANON_KEY") ?? readString("VITE_SUPABASE_ANON_KEY");
 
   const stripeSecretKey =
     readString("AISELFIE_STRIPE_SECRET_KEY") ?? readString("STRIPE_SECRET_KEY");
@@ -62,6 +71,10 @@ export function loadConfig(): AppConfig {
     port,
     corsAllowOrigin,
     appBaseUrl,
+    auth: {
+      cookieName,
+      cookieSecure,
+    },
     ollama: {
       baseUrl: ollamaBaseUrl,
       model: ollamaModel,
@@ -70,6 +83,7 @@ export function loadConfig(): AppConfig {
     supabase: {
       url: supabaseUrl,
       serviceRoleKey: supabaseServiceRoleKey,
+      anonKey: supabaseAnonKey,
     },
     stripe: {
       secretKey: stripeSecretKey,

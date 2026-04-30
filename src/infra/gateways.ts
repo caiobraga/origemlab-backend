@@ -65,6 +65,20 @@ export type SupabaseGateway = {
     propostaId?: string;
   }): Promise<{ count: number | null; rows: any[] }>;
   adminUpdateRedacaoStatus(id: string, status: string): Promise<any>;
+  // App (user-scoped)
+  createProposta(input: {
+    userId: string;
+    editalId: string;
+    campos_formulario: any;
+    gerado_com_ia: boolean;
+  }): Promise<any>;
+  updatePropostaForUser(userId: string, propostaId: string, patch: Record<string, any>): Promise<any>;
+  deletePropostaForUser(userId: string, propostaId: string): Promise<void>;
+  refreshMyIndicacoes(userId: string, limit: number): Promise<number>;
+  fetchMyIndicacoes(userId: string, limit: number): Promise<any[]>;
+  getProfile(userId: string): Promise<any | null>;
+  updateProfile(userId: string, patch: Record<string, any>): Promise<any>;
+  getReferralStats(userId: string): Promise<{ convites: number; conversoes: number; ganhos: number; potencial: number }>;
 };
 
 function createServiceSupabase(config: AppConfig): SupabaseClient | null {
@@ -493,6 +507,91 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         .single();
       if (error) throw new Error(error.message);
       return data;
+    },
+
+    async createProposta(input) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("propostas")
+        .insert({
+          edital_id: input.editalId,
+          user_id: input.userId,
+          status: "rascunho",
+          progresso: 0,
+          campos_formulario: input.campos_formulario || {},
+          gerado_com_ia: input.gerado_com_ia,
+        })
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async updatePropostaForUser(userId, propostaId, patch) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("propostas")
+        .update(patch)
+        .eq("id", propostaId)
+        .eq("user_id", userId)
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async deletePropostaForUser(userId, propostaId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { error } = await supabase.from("propostas").delete().eq("id", propostaId).eq("user_id", userId);
+      if (error) throw new Error(error.message);
+    },
+
+    async refreshMyIndicacoes(userId, limit) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase.rpc("refresh_my_indicacoes", { p_user_id: userId, p_limit: limit } as any);
+      if (error) throw new Error(error.message);
+      return typeof data === "number" ? data : Number(data ?? 0);
+    },
+
+    async fetchMyIndicacoes(userId, limit) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("edital_indicacoes")
+        .select("score,motivos,gerado_em,edital:editais (*)")
+        .eq("user_id", userId)
+        .order("score", { ascending: false })
+        .order("gerado_em", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+
+    async getProfile(userId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle();
+      if (error) throw new Error(error.message);
+      return data || null;
+    },
+
+    async updateProfile(userId, patch) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("profiles")
+        .upsert({ user_id: userId, ...patch }, { onConflict: "user_id" })
+        .select("*")
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async getReferralStats(userId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data } = await supabase.from("referrals").select("status, ganhos_referrer").eq("referrer_id", userId);
+      const referrals = (data as any[]) || [];
+      const conversoes = referrals.filter((r) => r.status === "convertido").length;
+      const ganhos = referrals.reduce((sum, r) => sum + (Number(r.ganhos_referrer) || 0), 0);
+      const credito = 50;
+      return { convites: referrals.length, conversoes, ganhos: Math.round(ganhos), potencial: conversoes * credito };
     },
   };
 
