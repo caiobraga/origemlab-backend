@@ -1,0 +1,24 @@
+import "./env.js";
+import express from "express";
+import { loadConfig } from "./config.js";
+import { corsMiddleware } from "./http/cors.js";
+import { errorHandler } from "./http/errors.js";
+import { buildRouter } from "./http/router.js";
+import { buildGateways } from "./infra/gateways.js";
+import { buildUseCases } from "./infra/usecases.js";
+
+const config = loadConfig();
+const gateways = buildGateways(config);
+const usecases = buildUseCases({ config, gateways });
+
+const app = express();
+app.use(corsMiddleware({ allowOrigin: config.corsAllowOrigin }));
+
+app.use(buildRouter({ config, ...usecases }));
+app.use(errorHandler);
+
+const port = config.port;
+app.listen(port, () => {
+  console.log(`[origemlab-backend] listening on :${port}`);
+});
+
