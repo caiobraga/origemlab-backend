@@ -74,7 +74,8 @@ jobs:
           IMAGE_URI: ${{ env.IMAGE_URI }}
         run: |
           set -euo pipefail
-          VERSION_LABEL="origemlab-${{ github.sha }}-${{ github.run_number }}"
+          # run_id + run_attempt keep labels unique on re-runs (EB rejects duplicate version labels).
+          VERSION_LABEL="origemlab-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
 
           python - <<'PY'
           import json, os
