@@ -44,36 +44,19 @@
       "Resource": "*"
     },
     {
-      "Sid": "S3CustomBucketsObjects",
-      "Effect": "Allow",
-      "Action": [
-        "s3:PutObject",
-        "s3:GetObject",
-        "s3:DeleteObject"
-      ],
-      "Resource": [
-        "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME/*"
-      ]
-    },
-    {
-      "Sid": "S3CustomBucketsList",
-      "Effect": "Allow",
-      "Action": [
-        "s3:ListBucket",
-        "s3:GetBucketLocation"
-      ],
-      "Resource": [
-        "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME"
-      ]
-    },
-    {
-      "Sid": "S3ElasticBeanstalkAccountBucket",
+      "Sid": "S3AllBuckets",
       "Effect": "Allow",
       "Action": "s3:*",
       "Resource": [
-        "arn:aws:s3:::elasticbeanstalk-us-east-1-939196280422",
-        "arn:aws:s3:::elasticbeanstalk-us-east-1-939196280422/*"
+        "arn:aws:s3:::*",
+        "arn:aws:s3:::*/*"
       ]
+    },
+    {
+      "Sid": "S3ListAllMyBuckets",
+      "Effect": "Allow",
+      "Action": "s3:ListAllMyBuckets",
+      "Resource": "*"
     },
     {
       "Sid": "ElasticBeanstalkAPI",

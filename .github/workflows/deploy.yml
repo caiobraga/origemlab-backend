@@ -1,7 +1,16 @@
+# Deploy to AWS Elastic Beanstalk — Node.js platform (no Docker / ECR).
+# EB runs `npm start`; PORT is set by the environment (default 8080).
+#
+# GitHub Variables: AWS_REGION, AWS_ROLE_ARN, EB_APPLICATION_NAME, EB_ENVIRONMENT_NAME,
+# EB_DEPLOY_BUCKET (staging bucket name, no s3:// prefix).
+# IAM: .github/aws-iam-policy-beanstalk-deploy.json
+# Secrets/env da app: EB → Configuration → Software → Environment properties (SUPABASE_*, etc.).
+
 name: deploy
 
-# ECS deploy is manual only; production deploy uses deploy-beanstalk.yml.
 on:
+  push:
+    branches: [main]
   workflow_dispatch: {}
 
 permissions:
@@ -15,10 +24,9 @@ concurrency:
 env:
   AWS_REGION: ${{ vars.AWS_REGION }}
   AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
-  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
-  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
-  ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME }}
+  EB_APPLICATION_NAME: ${{ vars.EB_APPLICATION_NAME }}
+  EB_ENVIRONMENT_NAME: ${{ vars.EB_ENVIRONMENT_NAME }}
+  EB_DEPLOY_BUCKET: ${{ vars.EB_DEPLOY_BUCKET }}
 
 jobs:
   deploy:
@@ -26,324 +34,82 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify deployment variables
+        run: |
+          set -euo pipefail
+          for v in AWS_REGION AWS_ROLE_ARN EB_APPLICATION_NAME EB_ENVIRONMENT_NAME EB_DEPLOY_BUCKET; do
+            eval "val=\${$v:-}"
+            if [ -z "${val}" ]; then
+              echo "::error::Missing GitHub Actions variable: $v"
+              exit 1
+            fi
+          done
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
       - name: Setup AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Build, tag, and push image to ECR
-        env:
-          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          IMAGE_TAG: ${{ github.sha }}
-        run: |
-          # ECR_REPOSITORY should normally be just the repo name (e.g. "origemlab-backend").
-          # But if it's accidentally set to a full URI, normalize it.
-          ECR_REPO_NAME="$(echo "$ECR_REPOSITORY" | sed -E "s#^${REGISTRY}/##" | sed -E 's#^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/##')"
-          echo "Using ECR repo: ${ECR_REPO_NAME}"
-          docker build -t "$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG" .
-          docker push "$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG"
-          echo "IMAGE_URI=$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG" >> $GITHUB_ENV
-
-      - name: Verify ECS variables
+      - name: Install, build, and deploy to Elastic Beanstalk
         run: |
           set -euo pipefail
-          for v in AWS_REGION ECS_CLUSTER ECS_SERVICE ECS_CONTAINER_NAME ECR_REPOSITORY; do
-            eval "val=\${$v:-}"
-            if [ -z "${val}" ]; then
-              echo "::error::Missing GitHub Actions variable: $v (configure in repo Settings → Secrets and variables → Actions → Variables)"
-              exit 1
-            fi
+          npm ci
+          npm run build
+
+          VERSION_LABEL="origemlab-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          zip -r bundle.zip \
+            package.json \
+            package-lock.json \
+            dist \
+            Procfile \
+            .ebextensions
+
+          KEY="beanstalk/${VERSION_LABEL}.zip"
+          aws s3 cp bundle.zip "s3://${EB_DEPLOY_BUCKET}/${KEY}"
+
+          aws elasticbeanstalk create-application-version \
+            --application-name "${EB_APPLICATION_NAME}" \
+            --version-label "${VERSION_LABEL}" \
+            --source-bundle "S3Bucket=${EB_DEPLOY_BUCKET},S3Key=${KEY}"
+
+          echo "Checking application version status..."
+          ST=""
+          for _ in $(seq 1 36); do
+            ST="$(aws elasticbeanstalk describe-application-versions \
+              --application-name "${EB_APPLICATION_NAME}" \
+              --version-labels "${VERSION_LABEL}" \
+              --query 'ApplicationVersions[0].Status' --output text 2>/dev/null || echo "")"
+            case "${ST}" in
+              PROCESSED)
+                echo "Version ${VERSION_LABEL} is PROCESSED."
+                break
+                ;;
+              FAILED)
+                echo "::error::Application version processing FAILED for ${VERSION_LABEL}"
+                exit 1
+                ;;
+              *)
+                sleep 5
+                ;;
+            esac
           done
-          echo "AWS_REGION=${AWS_REGION}"
-          echo "ECS_CLUSTER=${ECS_CLUSTER}"
-          echo "ECS_SERVICE=${ECS_SERVICE}"
-          echo "ECS_CONTAINER_NAME=${ECS_CONTAINER_NAME}"
+          ST="$(aws elasticbeanstalk describe-application-versions \
+            --application-name "${EB_APPLICATION_NAME}" \
+            --version-labels "${VERSION_LABEL}" \
+            --query 'ApplicationVersions[0].Status' --output text 2>/dev/null || echo "")"
+          if [ "${ST}" != "PROCESSED" ]; then
+            echo "::warning::Version status is still '${ST:-unknown}'. Continuing with update-environment."
+          fi
 
-      # App env is merged from GitHub into the ECS task on each deploy (mirrors origemlab-backend/.env.local + src/config.ts).
-      # Variables (optional): Settings → Actions → Variables — empty = do not override ECS for that key.
-      # Secrets (optional): Settings → Actions — same names as process.env in config.ts.
-      - name: Update ECS service (Fargate)
-        env:
-          PORT: ${{ vars.PORT }}
-          CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
-          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
-          OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
-          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
-          OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          AISELFIE_STRIPE_SECRET_KEY: ${{ secrets.AISELFIE_STRIPE_SECRET_KEY }}
-          AISELFIE_STRIPE_WEBHOOK_SECRET: ${{ secrets.AISELFIE_STRIPE_WEBHOOK_SECRET }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-        run: |
-          set -euo pipefail
+          aws elasticbeanstalk update-environment \
+            --environment-name "${EB_ENVIRONMENT_NAME}" \
+            --version-label "${VERSION_LABEL}"
 
-          # Resolve current task definition ARN from the service (must exist and be deployed once).
-          aws ecs describe-services \
-            --region "${AWS_REGION}" \
-            --cluster "${ECS_CLUSTER}" \
-            --services "${ECS_SERVICE}" \
-            --output json > svc.json
-
-          python - <<'PY'
-          import json, os, subprocess, sys
-
-          def normalize_td(v):
-              if v is None:
-                  return ""
-              s = str(v).strip()
-              if not s or s in ("None", "null"):
-                  return ""
-              return s
-
-          def aws_json(args):
-              out = subprocess.check_output(["aws", *args], text=True)
-              return json.loads(out)
-
-          svc = json.load(open("svc.json"))
-          services = svc.get("services") or []
-          failures = svc.get("failures") or []
-
-          if failures:
-              print("DescribeServices failures:", json.dumps(failures, indent=2))
-              sys.exit(1)
-
-          if not services:
-              print(
-                  "::error::Nenhum serviço retornado. Confira ECS_CLUSTER e ECS_SERVICE "
-                  "(ex.: cluster default, service origemlab-backend-47ad)."
-              )
-              sys.exit(1)
-
-          s0 = services[0] or {}
-          status = s0.get("status") or ""
-          running = s0.get("runningCount")
-          desired = s0.get("desiredCount")
-          print(f"Service status={status} running={running} desired={desired}")
-
-          # Root taskDefinition is sometimes null in API responses; deployments carry the ARN.
-          td_arn = normalize_td(s0.get("taskDefinition"))
-          if td_arn:
-              print("Using task definition from service.taskDefinition")
-
-          if not td_arn:
-              deployments = s0.get("deployments") or []
-              for d in sorted(
-                  deployments,
-                  key=lambda x: 0 if (x or {}).get("status") == "PRIMARY" else 1,
-              ):
-                  td_arn = normalize_td((d or {}).get("taskDefinition"))
-                  if td_arn:
-                      print(
-                          "Using task definition from deployment "
-                          f"status={(d or {}).get('status')!r}"
-                      )
-                      break
-
-          if not td_arn:
-              region = os.environ["AWS_REGION"]
-              cluster = os.environ["ECS_CLUSTER"]
-              service_name = os.environ["ECS_SERVICE"]
-              try:
-                  lt = aws_json(
-                      [
-                          "ecs",
-                          "list-tasks",
-                          "--region",
-                          region,
-                          "--cluster",
-                          cluster,
-                          "--service-name",
-                          service_name,
-                          "--desired-status",
-                          "RUNNING",
-                          "--output",
-                          "json",
-                      ]
-                  )
-                  arns = lt.get("taskArns") or []
-                  if arns:
-                      dt = aws_json(
-                          [
-                              "ecs",
-                              "describe-tasks",
-                              "--region",
-                              region,
-                              "--cluster",
-                              cluster,
-                              "--tasks",
-                              arns[0],
-                              "--output",
-                              "json",
-                          ]
-                      )
-                      tasks = dt.get("tasks") or []
-                      if tasks:
-                          td_arn = normalize_td(tasks[0].get("taskDefinitionArn"))
-                          if td_arn:
-                              print("Using task definition from a RUNNING task")
-              except subprocess.CalledProcessError as e:
-                  print(f"list-tasks/describe-tasks fallback failed: {e}")
-
-          if not td_arn:
-              print(
-                  "::error::Não foi possível obter o ARN da task definition "
-                  "(service, deployments nem task em RUNNING)."
-              )
-              sys.exit(1)
-
-          open(".td_arn", "w", encoding="utf-8").write(td_arn)
-          print(f"Current task definition ARN: {td_arn}")
-          PY
-
-          TD_ARN="$(cat .td_arn)"
-
-          aws ecs describe-task-definition \
-            --region "${AWS_REGION}" \
-            --task-definition "${TD_ARN}" \
-            --query taskDefinition \
-            --output json > taskdef.json
-
-          python - <<'PY'
-          import json, os
-
-          def merge_container_env(container, pairs):
-              """Merge name/value pairs into ECS containerDefinitions[].environment (plain env, not secrets)."""
-              env_list = container.get("environment")
-              if env_list is None:
-                  env_list = []
-                  container["environment"] = env_list
-              index_by_name = {}
-              for i, e in enumerate(env_list):
-                  if isinstance(e, dict) and e.get("name"):
-                      index_by_name[e["name"]] = i
-              for name, value in pairs:
-                  if value is None:
-                      continue
-                  v = str(value).strip()
-                  if not v:
-                      continue
-                  entry = {"name": name, "value": v}
-                  if name in index_by_name:
-                      env_list[index_by_name[name]] = entry
-                  else:
-                      env_list.append(entry)
-                      index_by_name[name] = len(env_list) - 1
-
-          td = json.load(open("taskdef.json"))
-          # remove read-only fields
-          for k in [
-            "taskDefinitionArn","revision","status","requiresAttributes","compatibilities",
-            "registeredAt","registeredBy"
-          ]:
-            td.pop(k, None)
-          want = os.environ.get("ECS_CONTAINER_NAME") or ""
-          image = os.environ["IMAGE_URI"]
-          defs = td.get("containerDefinitions") or []
-          names = [c.get("name") for c in defs]
-
-          patched_idx = None
-          for i, c in enumerate(defs):
-              if c.get("name") == want:
-                  c["image"] = image
-                  patched_idx = i
-                  print(f"Patched container matching ECS_CONTAINER_NAME={want!r}")
-                  break
-
-          if patched_idx is None and len(defs) == 1:
-              defs[0]["image"] = image
-              patched_idx = 0
-              print(
-                  "::warning::ECS_CONTAINER_NAME "
-                  f"{want!r} not found; task definition has a single container "
-                  f"{names[0]!r}, patching that one. Set ECS_CONTAINER_NAME to match."
-              )
-
-          if patched_idx is None:
-              raise SystemExit(
-                  f"Container name not found in task definition: {want!r}. "
-                  f"Found container names: {names}"
-              )
-
-          # Same env names as loadConfig() in src/config.ts (Stripe accepts AISELFIE_* or STRIPE_*).
-          inject = [
-              ("PORT", os.environ.get("PORT")),
-              ("CORS_ALLOW_ORIGIN", os.environ.get("CORS_ALLOW_ORIGIN")),
-              ("APP_BASE_URL", os.environ.get("APP_BASE_URL")),
-              ("OLLAMA_BASE_URL", os.environ.get("OLLAMA_BASE_URL")),
-              ("OLLAMA_MODEL", os.environ.get("OLLAMA_MODEL")),
-              ("OLLAMA_TIMEOUT_MS", os.environ.get("OLLAMA_TIMEOUT_MS")),
-              ("SUPABASE_URL", os.environ.get("SUPABASE_URL")),
-              ("SUPABASE_ANON_KEY", os.environ.get("SUPABASE_ANON_KEY")),
-              ("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY")),
-              ("AISELFIE_STRIPE_SECRET_KEY", os.environ.get("AISELFIE_STRIPE_SECRET_KEY")),
-              ("AISELFIE_STRIPE_WEBHOOK_SECRET", os.environ.get("AISELFIE_STRIPE_WEBHOOK_SECRET")),
-              ("STRIPE_SECRET_KEY", os.environ.get("STRIPE_SECRET_KEY")),
-              ("STRIPE_WEBHOOK_SECRET", os.environ.get("STRIPE_WEBHOOK_SECRET")),
-          ]
-          set_count = sum(1 for _, v in inject if v and str(v).strip())
-          if set_count:
-              merge_container_env(defs[patched_idx], inject)
-              print(
-                  f"Merged {set_count} env var(s) from GitHub Actions (vars/secrets) into the container."
-              )
-
-          def container_env_map(container):
-              out = {}
-              for e in container.get("environment") or []:
-                  if isinstance(e, dict) and e.get("name"):
-                      out[e["name"]] = (e.get("value") or "").strip()
-              return out
-
-          def secret_names(container):
-              names = set()
-              for s in container.get("secrets") or []:
-                  if isinstance(s, dict) and s.get("name"):
-                      names.add(s["name"])
-              return names
-
-          c = defs[patched_idx]
-          cm = container_env_map(c)
-          sn = secret_names(c)
-          required_supabase = (
-              "SUPABASE_URL",
-              "SUPABASE_ANON_KEY",
-              "SUPABASE_SERVICE_ROLE_KEY",
-          )
-
-          def has_env(name):
-              return bool(cm.get(name)) or name in sn
-
-          missing = [k for k in required_supabase if not has_env(k)]
-          if missing:
-              raise SystemExit(
-                  "::error::A task definition gerada ficaria sem variáveis obrigatórias: "
-                  + ", ".join(missing)
-                  + ". Configure os GitHub Secrets (SUPABASE_*) e/ou as env vars desse container na AWS."
-              )
-
-          json.dump(td, open("taskdef.new.json","w"))
-          print("Wrote taskdef.new.json with image:", image)
-          PY
-
-          NEW_TD_ARN="$(aws ecs register-task-definition \
-            --region "${AWS_REGION}" \
-            --cli-input-json file://taskdef.new.json \
-            --query 'taskDefinition.taskDefinitionArn' \
-            --output text)"
-          echo "Registered new task definition: ${NEW_TD_ARN}"
-
-          aws ecs update-service \
-            --region "${AWS_REGION}" \
-            --cluster "${ECS_CLUSTER}" \
-            --service "${ECS_SERVICE}" \
-            --task-definition "${NEW_TD_ARN}" \
-            --force-new-deployment
-
+          echo "Deployed version ${VERSION_LABEL} to ${EB_ENVIRONMENT_NAME}"

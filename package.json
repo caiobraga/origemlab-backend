@@ -2,6 +2,9 @@
   "name": "origemlab-backend",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
