@@ -100,9 +100,11 @@ jobs:
             --version-label "${VERSION_LABEL}" \
             --source-bundle "S3Bucket=${EB_DEPLOY_BUCKET},S3Key=${KEY}"
 
-          # Wait until EB finishes processing the bundle (avoid UNPROCESSED → empty/wrong version on instances).
-          echo "Waiting for application version to become PROCESSED..."
-          for _ in $(seq 1 120); do
+          # Dockerrun + ECR images often stay UNPROCESSED until the environment deploy runs.
+          # Fail fast only on FAILED; otherwise wait briefly for PROCESSED, then continue.
+          echo "Checking application version status..."
+          ST=""
+          for _ in $(seq 1 36); do
             ST="$(aws elasticbeanstalk describe-application-versions \
               --application-name "${EB_APPLICATION_NAME}" \
               --version-labels "${VERSION_LABEL}" \
@@ -124,10 +126,9 @@ jobs:
           ST="$(aws elasticbeanstalk describe-application-versions \
             --application-name "${EB_APPLICATION_NAME}" \
             --version-labels "${VERSION_LABEL}" \
-            --query 'ApplicationVersions[0].Status' --output text)"
+            --query 'ApplicationVersions[0].Status' --output text 2>/dev/null || echo "")"
           if [ "${ST}" != "PROCESSED" ]; then
-            echo "::error::Timed out waiting for PROCESSED (last status: ${ST})"
-            exit 1
+            echo "::warning::Version status is still '${ST:-unknown}' (common for Dockerrun/ECR). Continuing with update-environment."
           fi
 
           aws elasticbeanstalk update-environment \
