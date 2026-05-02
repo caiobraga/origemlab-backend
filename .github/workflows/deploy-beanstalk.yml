@@ -100,6 +100,36 @@ jobs:
             --version-label "${VERSION_LABEL}" \
             --source-bundle "S3Bucket=${EB_DEPLOY_BUCKET},S3Key=${KEY}"
 
+          # Wait until EB finishes processing the bundle (avoid UNPROCESSED → empty/wrong version on instances).
+          echo "Waiting for application version to become PROCESSED..."
+          for _ in $(seq 1 120); do
+            ST="$(aws elasticbeanstalk describe-application-versions \
+              --application-name "${EB_APPLICATION_NAME}" \
+              --version-labels "${VERSION_LABEL}" \
+              --query 'ApplicationVersions[0].Status' --output text 2>/dev/null || echo "")"
+            case "${ST}" in
+              PROCESSED)
+                echo "Version ${VERSION_LABEL} is PROCESSED."
+                break
+                ;;
+              FAILED)
+                echo "::error::Application version processing FAILED for ${VERSION_LABEL}"
+                exit 1
+                ;;
+              *)
+                sleep 5
+                ;;
+            esac
+          done
+          ST="$(aws elasticbeanstalk describe-application-versions \
+            --application-name "${EB_APPLICATION_NAME}" \
+            --version-labels "${VERSION_LABEL}" \
+            --query 'ApplicationVersions[0].Status' --output text)"
+          if [ "${ST}" != "PROCESSED" ]; then
+            echo "::error::Timed out waiting for PROCESSED (last status: ${ST})"
+            exit 1
+          fi
+
           aws elasticbeanstalk update-environment \
             --environment-name "${EB_ENVIRONMENT_NAME}" \
             --version-label "${VERSION_LABEL}"
