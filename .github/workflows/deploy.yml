@@ -65,7 +65,24 @@ jobs:
           echo "ECS_SERVICE=${ECS_SERVICE}"
           echo "ECS_CONTAINER_NAME=${ECS_CONTAINER_NAME}"
 
+      # App env is merged from GitHub into the ECS task on each deploy (mirrors origemlab-backend/.env.local + src/config.ts).
+      # Variables (optional): Settings → Actions → Variables — empty = do not override ECS for that key.
+      # Secrets (optional): Settings → Actions — same names as process.env in config.ts.
       - name: Update ECS service (Fargate)
+        env:
+          PORT: ${{ vars.PORT }}
+          CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+          OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          AISELFIE_STRIPE_SECRET_KEY: ${{ secrets.AISELFIE_STRIPE_SECRET_KEY }}
+          AISELFIE_STRIPE_WEBHOOK_SECRET: ${{ secrets.AISELFIE_STRIPE_WEBHOOK_SECRET }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
         run: |
           set -euo pipefail
 
@@ -197,6 +214,30 @@ jobs:
 
           python - <<'PY'
           import json, os
+
+          def merge_container_env(container, pairs):
+              """Merge name/value pairs into ECS containerDefinitions[].environment (plain env, not secrets)."""
+              env_list = container.get("environment")
+              if env_list is None:
+                  env_list = []
+                  container["environment"] = env_list
+              index_by_name = {}
+              for i, e in enumerate(env_list):
+                  if isinstance(e, dict) and e.get("name"):
+                      index_by_name[e["name"]] = i
+              for name, value in pairs:
+                  if value is None:
+                      continue
+                  v = str(value).strip()
+                  if not v:
+                      continue
+                  entry = {"name": name, "value": v}
+                  if name in index_by_name:
+                      env_list[index_by_name[name]] = entry
+                  else:
+                      env_list.append(entry)
+                      index_by_name[name] = len(env_list) - 1
+
           td = json.load(open("taskdef.json"))
           # remove read-only fields
           for k in [
@@ -209,28 +250,52 @@ jobs:
           defs = td.get("containerDefinitions") or []
           names = [c.get("name") for c in defs]
 
-          updated = False
-          for c in defs:
+          patched_idx = None
+          for i, c in enumerate(defs):
               if c.get("name") == want:
                   c["image"] = image
-                  updated = True
+                  patched_idx = i
                   print(f"Patched container matching ECS_CONTAINER_NAME={want!r}")
                   break
 
-          if not updated and len(defs) == 1:
+          if patched_idx is None and len(defs) == 1:
               defs[0]["image"] = image
-              updated = True
+              patched_idx = 0
               print(
                   "::warning::ECS_CONTAINER_NAME "
                   f"{want!r} not found; task definition has a single container "
                   f"{names[0]!r}, patching that one. Set ECS_CONTAINER_NAME to match."
               )
 
-          if not updated:
+          if patched_idx is None:
               raise SystemExit(
                   f"Container name not found in task definition: {want!r}. "
                   f"Found container names: {names}"
               )
+
+          # Same env names as loadConfig() in src/config.ts (Stripe accepts AISELFIE_* or STRIPE_*).
+          inject = [
+              ("PORT", os.environ.get("PORT")),
+              ("CORS_ALLOW_ORIGIN", os.environ.get("CORS_ALLOW_ORIGIN")),
+              ("APP_BASE_URL", os.environ.get("APP_BASE_URL")),
+              ("OLLAMA_BASE_URL", os.environ.get("OLLAMA_BASE_URL")),
+              ("OLLAMA_MODEL", os.environ.get("OLLAMA_MODEL")),
+              ("OLLAMA_TIMEOUT_MS", os.environ.get("OLLAMA_TIMEOUT_MS")),
+              ("SUPABASE_URL", os.environ.get("SUPABASE_URL")),
+              ("SUPABASE_ANON_KEY", os.environ.get("SUPABASE_ANON_KEY")),
+              ("SUPABASE_SERVICE_ROLE_KEY", os.environ.get("SUPABASE_SERVICE_ROLE_KEY")),
+              ("AISELFIE_STRIPE_SECRET_KEY", os.environ.get("AISELFIE_STRIPE_SECRET_KEY")),
+              ("AISELFIE_STRIPE_WEBHOOK_SECRET", os.environ.get("AISELFIE_STRIPE_WEBHOOK_SECRET")),
+              ("STRIPE_SECRET_KEY", os.environ.get("STRIPE_SECRET_KEY")),
+              ("STRIPE_WEBHOOK_SECRET", os.environ.get("STRIPE_WEBHOOK_SECRET")),
+          ]
+          set_count = sum(1 for _, v in inject if v and str(v).strip())
+          if set_count:
+              merge_container_env(defs[patched_idx], inject)
+              print(
+                  f"Merged {set_count} env var(s) from GitHub Actions (vars/secrets) into the container."
+              )
+
           json.dump(td, open("taskdef.new.json","w"))
           print("Wrote taskdef.new.json with image:", image)
           PY
