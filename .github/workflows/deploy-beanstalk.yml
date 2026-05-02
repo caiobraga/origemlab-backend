@@ -5,7 +5,9 @@
 # 2) S3 bucket for deployment bundles (e.g. origemlab-eb-artifacts-ACCOUNT).
 # 3) GitHub Variables: AWS_REGION, AWS_ROLE_ARN, ECR_REPOSITORY, EB_APPLICATION_NAME,
 #    EB_ENVIRONMENT_NAME, EB_DEPLOY_BUCKET (bucket name only).
-# 4) OIDC role: elasticbeanstalk (create version + update env) + s3:PutObject on EB_DEPLOY_BUCKET.
+# 4) OIDC role: merge policies from .github/aws-iam-policy-beanstalk-deploy.json into GithubActions
+#    (plus your existing ECR/ECS policies). EB needs CloudFormation reads including
+#    DescribeStackResource; S3 bundle access includes GetObjectAcl on the staging bucket.
 # 5) EB console → Software → Environment properties: SUPABASE_*, STRIPE_*, etc.
 
 name: deploy-beanstalk
