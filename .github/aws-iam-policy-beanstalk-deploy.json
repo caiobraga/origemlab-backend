@@ -35,10 +35,24 @@
       "Resource": "*"
     },
     {
+      "Sid": "AutoScalingReadForElasticBeanstalk",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:DescribeAutoScalingGroups",
+        "autoscaling:DescribeAutoScalingInstances",
+        "autoscaling:DescribeScalingActivities",
+        "autoscaling:DescribePolicies",
+        "autoscaling:DescribeLaunchConfigurations",
+        "autoscaling:DescribeScheduledActions"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "ElasticBeanstalkStagingBucketFullForDeployUser",
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
+        "s3:PutObjectAcl",
         "s3:GetObject",
         "s3:GetObjectAcl",
         "s3:GetObjectVersion",
