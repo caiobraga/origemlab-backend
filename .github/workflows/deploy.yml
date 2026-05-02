@@ -1,8 +1,7 @@
 name: deploy
 
+# ECS deploy is manual only; production deploy uses deploy-beanstalk.yml.
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 permissions:

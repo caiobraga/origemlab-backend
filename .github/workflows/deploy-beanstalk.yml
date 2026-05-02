@@ -1,0 +1,104 @@
+# Deploy to AWS Elastic Beanstalk (Docker image from ECR + Dockerrun.aws.json v1).
+#
+# Prerequisites:
+# 1) EB Application + Environment — platform "Docker running on 64bit Amazon Linux 2"
+# 2) S3 bucket for deployment bundles (e.g. origemlab-eb-artifacts-ACCOUNT).
+# 3) GitHub Variables: AWS_REGION, AWS_ROLE_ARN, ECR_REPOSITORY, EB_APPLICATION_NAME,
+#    EB_ENVIRONMENT_NAME, EB_DEPLOY_BUCKET (bucket name only).
+# 4) OIDC role: elasticbeanstalk (create version + update env) + s3:PutObject on EB_DEPLOY_BUCKET.
+# 5) EB console → Software → Environment properties: SUPABASE_*, STRIPE_*, etc.
+
+name: deploy-beanstalk
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: origemlab-backend-beanstalk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  EB_APPLICATION_NAME: ${{ vars.EB_APPLICATION_NAME }}
+  EB_ENVIRONMENT_NAME: ${{ vars.EB_ENVIRONMENT_NAME }}
+  EB_DEPLOY_BUCKET: ${{ vars.EB_DEPLOY_BUCKET }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Beanstalk variables
+        run: |
+          set -euo pipefail
+          for v in AWS_REGION AWS_ROLE_ARN ECR_REPOSITORY EB_APPLICATION_NAME EB_ENVIRONMENT_NAME EB_DEPLOY_BUCKET; do
+            eval "val=\${$v:-}"
+            if [ -z "${val}" ]; then
+              echo "::error::Missing GitHub Actions variable: $v"
+              exit 1
+            fi
+          done
+
+      - name: Setup AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image to ECR
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          ECR_REPO_NAME="$(echo "$ECR_REPOSITORY" | sed -E "s#^${REGISTRY}/##" | sed -E 's#^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/##')"
+          echo "Using ECR repo: ${ECR_REPO_NAME}"
+          docker build -t "$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG" .
+          docker push "$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG"
+          echo "IMAGE_URI=$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG" >> "$GITHUB_ENV"
+
+      - name: Create Dockerrun bundle and deploy to Elastic Beanstalk
+        env:
+          IMAGE_URI: ${{ env.IMAGE_URI }}
+        run: |
+          set -euo pipefail
+          VERSION_LABEL="origemlab-${{ github.sha }}-${{ github.run_number }}"
+
+          python - <<'PY'
+          import json, os
+          doc = {
+              "AWSEBDockerrunVersion": "1",
+              "Image": {"Name": os.environ["IMAGE_URI"], "Update": "true"},
+              "Ports": [{"ContainerPort": "8080"}],
+          }
+          with open("Dockerrun.aws.json", "w", encoding="utf-8") as f:
+              json.dump(doc, f, indent=2)
+          PY
+
+          zip -r bundle.zip Dockerrun.aws.json .ebextensions
+
+          KEY="beanstalk/${VERSION_LABEL}.zip"
+          aws s3 cp bundle.zip "s3://${EB_DEPLOY_BUCKET}/${KEY}"
+
+          aws elasticbeanstalk create-application-version \
+            --application-name "${EB_APPLICATION_NAME}" \
+            --version-label "${VERSION_LABEL}" \
+            --source-bundle "S3Bucket=${EB_DEPLOY_BUCKET},S3Key=${KEY}"
+
+          aws elasticbeanstalk update-environment \
+            --environment-name "${EB_ENVIRONMENT_NAME}" \
+            --version-label "${VERSION_LABEL}"
+
+          echo "Deployed version ${VERSION_LABEL} to ${EB_ENVIRONMENT_NAME}"
