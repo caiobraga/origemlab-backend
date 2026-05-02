@@ -50,16 +50,71 @@ jobs:
           docker push "$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG"
           echo "IMAGE_URI=$REGISTRY/$ECR_REPO_NAME:$IMAGE_TAG" >> $GITHUB_ENV
 
+      - name: Verify ECS variables
+        run: |
+          set -euo pipefail
+          for v in AWS_REGION ECS_CLUSTER ECS_SERVICE ECS_CONTAINER_NAME ECR_REPOSITORY; do
+            eval "val=\${$v:-}"
+            if [ -z "${val}" ]; then
+              echo "::error::Missing GitHub Actions variable: $v (configure in repo Settings → Secrets and variables → Actions → Variables)"
+              exit 1
+            fi
+          done
+          echo "AWS_REGION=${AWS_REGION}"
+          echo "ECS_CLUSTER=${ECS_CLUSTER}"
+          echo "ECS_SERVICE=${ECS_SERVICE}"
+          echo "ECS_CONTAINER_NAME=${ECS_CONTAINER_NAME}"
+
       - name: Update ECS service (Fargate)
         run: |
-          TD_ARN="$(aws ecs describe-services \
+          set -euo pipefail
+
+          # Resolve current task definition ARN from the service (must exist and be deployed once).
+          aws ecs describe-services \
+            --region "${AWS_REGION}" \
             --cluster "${ECS_CLUSTER}" \
             --services "${ECS_SERVICE}" \
-            --query 'services[0].taskDefinition' \
-            --output text)"
-          echo "Current task definition: ${TD_ARN}"
+            --output json > svc.json
+
+          python - <<'PY'
+          import json, sys
+
+          svc = json.load(open("svc.json"))
+          services = svc.get("services") or []
+          failures = svc.get("failures") or []
+
+          if failures:
+              print("DescribeServices failures:", json.dumps(failures, indent=2))
+              sys.exit(1)
+
+          if not services:
+              print(
+                  "::error::Nenhum serviço retornado. Confira ECS_CLUSTER e ECS_SERVICE "
+                  "(ex.: cluster default, service origemlab-backend-47ad)."
+              )
+              sys.exit(1)
+
+          td_arn = (services[0] or {}).get("taskDefinition") or ""
+          status = (services[0] or {}).get("status") or ""
+          running = (services[0] or {}).get("runningCount")
+          desired = (services[0] or {}).get("desiredCount")
+
+          print(f"Service status={status} running={running} desired={desired}")
+          if not td_arn or td_arn in ("None", "null"):
+              print(
+                  "::error::O serviço não tem taskDefinition (None). "
+                  "Faça um deploy inicial pelo console ECS ou crie o serviço com uma task definition válida."
+              )
+              sys.exit(1)
+
+          open(".td_arn", "w", encoding="utf-8").write(td_arn)
+          print(f"Current task definition ARN: {td_arn}")
+          PY
+
+          TD_ARN="$(cat .td_arn)"
 
           aws ecs describe-task-definition \
+            --region "${AWS_REGION}" \
             --task-definition "${TD_ARN}" \
             --query taskDefinition \
             --output json > taskdef.json
@@ -76,23 +131,30 @@ jobs:
           name = os.environ["ECS_CONTAINER_NAME"]
           image = os.environ["IMAGE_URI"]
           updated = False
+          names = []
           for c in td.get("containerDefinitions", []):
-            if c.get("name") == name:
-              c["image"] = image
-              updated = True
+              names.append(c.get("name"))
+              if c.get("name") == name:
+                  c["image"] = image
+                  updated = True
           if not updated:
-            raise SystemExit(f"Container name not found in task definition: {name}")
+              raise SystemExit(
+                  f"Container name not found in task definition: {name!r}. "
+                  f"Found container names: {names}"
+              )
           json.dump(td, open("taskdef.new.json","w"))
           print("Wrote taskdef.new.json with image:", image)
           PY
 
           NEW_TD_ARN="$(aws ecs register-task-definition \
+            --region "${AWS_REGION}" \
             --cli-input-json file://taskdef.new.json \
             --query 'taskDefinition.taskDefinitionArn' \
             --output text)"
           echo "Registered new task definition: ${NEW_TD_ARN}"
 
           aws ecs update-service \
+            --region "${AWS_REGION}" \
             --cluster "${ECS_CLUSTER}" \
             --service "${ECS_SERVICE}" \
             --task-definition "${NEW_TD_ARN}" \
