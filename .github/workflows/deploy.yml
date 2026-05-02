@@ -204,18 +204,31 @@ jobs:
             "registeredAt","registeredBy"
           ]:
             td.pop(k, None)
-          name = os.environ["ECS_CONTAINER_NAME"]
+          want = os.environ.get("ECS_CONTAINER_NAME") or ""
           image = os.environ["IMAGE_URI"]
+          defs = td.get("containerDefinitions") or []
+          names = [c.get("name") for c in defs]
+
           updated = False
-          names = []
-          for c in td.get("containerDefinitions", []):
-              names.append(c.get("name"))
-              if c.get("name") == name:
+          for c in defs:
+              if c.get("name") == want:
                   c["image"] = image
                   updated = True
+                  print(f"Patched container matching ECS_CONTAINER_NAME={want!r}")
+                  break
+
+          if not updated and len(defs) == 1:
+              defs[0]["image"] = image
+              updated = True
+              print(
+                  "::warning::ECS_CONTAINER_NAME "
+                  f"{want!r} not found; task definition has a single container "
+                  f"{names[0]!r}, patching that one. Set ECS_CONTAINER_NAME to match."
+              )
+
           if not updated:
               raise SystemExit(
-                  f"Container name not found in task definition: {name!r}. "
+                  f"Container name not found in task definition: {want!r}. "
                   f"Found container names: {names}"
               )
           json.dump(td, open("taskdef.new.json","w"))
