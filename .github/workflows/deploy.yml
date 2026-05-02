@@ -77,7 +77,19 @@ jobs:
             --output json > svc.json
 
           python - <<'PY'
-          import json, sys
+          import json, os, subprocess, sys
+
+          def normalize_td(v):
+              if v is None:
+                  return ""
+              s = str(v).strip()
+              if not s or s in ("None", "null"):
+                  return ""
+              return s
+
+          def aws_json(args):
+              out = subprocess.check_output(["aws", *args], text=True)
+              return json.loads(out)
 
           svc = json.load(open("svc.json"))
           services = svc.get("services") or []
@@ -94,16 +106,80 @@ jobs:
               )
               sys.exit(1)
 
-          td_arn = (services[0] or {}).get("taskDefinition") or ""
-          status = (services[0] or {}).get("status") or ""
-          running = (services[0] or {}).get("runningCount")
-          desired = (services[0] or {}).get("desiredCount")
-
+          s0 = services[0] or {}
+          status = s0.get("status") or ""
+          running = s0.get("runningCount")
+          desired = s0.get("desiredCount")
           print(f"Service status={status} running={running} desired={desired}")
-          if not td_arn or td_arn in ("None", "null"):
+
+          # Root taskDefinition is sometimes null in API responses; deployments carry the ARN.
+          td_arn = normalize_td(s0.get("taskDefinition"))
+          if td_arn:
+              print("Using task definition from service.taskDefinition")
+
+          if not td_arn:
+              deployments = s0.get("deployments") or []
+              for d in sorted(
+                  deployments,
+                  key=lambda x: 0 if (x or {}).get("status") == "PRIMARY" else 1,
+              ):
+                  td_arn = normalize_td((d or {}).get("taskDefinition"))
+                  if td_arn:
+                      print(
+                          "Using task definition from deployment "
+                          f"status={(d or {}).get('status')!r}"
+                      )
+                      break
+
+          if not td_arn:
+              region = os.environ["AWS_REGION"]
+              cluster = os.environ["ECS_CLUSTER"]
+              service_name = os.environ["ECS_SERVICE"]
+              try:
+                  lt = aws_json(
+                      [
+                          "ecs",
+                          "list-tasks",
+                          "--region",
+                          region,
+                          "--cluster",
+                          cluster,
+                          "--service-name",
+                          service_name,
+                          "--desired-status",
+                          "RUNNING",
+                          "--output",
+                          "json",
+                      ]
+                  )
+                  arns = lt.get("taskArns") or []
+                  if arns:
+                      dt = aws_json(
+                          [
+                              "ecs",
+                              "describe-tasks",
+                              "--region",
+                              region,
+                              "--cluster",
+                              cluster,
+                              "--tasks",
+                              arns[0],
+                              "--output",
+                              "json",
+                          ]
+                      )
+                      tasks = dt.get("tasks") or []
+                      if tasks:
+                          td_arn = normalize_td(tasks[0].get("taskDefinitionArn"))
+                          if td_arn:
+                              print("Using task definition from a RUNNING task")
+              except subprocess.CalledProcessError as e:
+                  print(f"list-tasks/describe-tasks fallback failed: {e}")
+
+          if not td_arn:
               print(
-                  "::error::O serviço não tem taskDefinition (None). "
-                  "Faça um deploy inicial pelo console ECS ou crie o serviço com uma task definition válida."
+                  "::error::Não foi possível obter o ARN da task definition "
+                  "(service, deployments nem task em RUNNING)."
               )
               sys.exit(1)
 
