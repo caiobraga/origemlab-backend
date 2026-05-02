@@ -296,6 +296,40 @@ jobs:
                   f"Merged {set_count} env var(s) from GitHub Actions (vars/secrets) into the container."
               )
 
+          def container_env_map(container):
+              out = {}
+              for e in container.get("environment") or []:
+                  if isinstance(e, dict) and e.get("name"):
+                      out[e["name"]] = (e.get("value") or "").strip()
+              return out
+
+          def secret_names(container):
+              names = set()
+              for s in container.get("secrets") or []:
+                  if isinstance(s, dict) and s.get("name"):
+                      names.add(s["name"])
+              return names
+
+          c = defs[patched_idx]
+          cm = container_env_map(c)
+          sn = secret_names(c)
+          required_supabase = (
+              "SUPABASE_URL",
+              "SUPABASE_ANON_KEY",
+              "SUPABASE_SERVICE_ROLE_KEY",
+          )
+
+          def has_env(name):
+              return bool(cm.get(name)) or name in sn
+
+          missing = [k for k in required_supabase if not has_env(k)]
+          if missing:
+              raise SystemExit(
+                  "::error::A task definition gerada ficaria sem variáveis obrigatórias: "
+                  + ", ".join(missing)
+                  + ". Configure os GitHub Secrets (SUPABASE_*) e/ou as env vars desse container na AWS."
+              )
+
           json.dump(td, open("taskdef.new.json","w"))
           print("Wrote taskdef.new.json with image:", image)
           PY
