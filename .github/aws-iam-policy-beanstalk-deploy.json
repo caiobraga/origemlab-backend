@@ -2,77 +2,177 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "ElasticBeanstalkDeployAPI",
+      "Sid": "ECRAuth",
+      "Effect": "Allow",
+      "Action": "ecr:GetAuthorizationToken",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ECRRepositoryAccess",
       "Effect": "Allow",
       "Action": [
-        "elasticbeanstalk:CreateApplicationVersion",
-        "elasticbeanstalk:UpdateEnvironment",
-        "elasticbeanstalk:DescribeEnvironments",
-        "elasticbeanstalk:DescribeEnvironmentHealth",
-        "elasticbeanstalk:DescribeEvents",
-        "elasticbeanstalk:DescribeApplications",
-        "elasticbeanstalk:DescribeApplicationVersions",
-        "elasticbeanstalk:DescribeConfigurationSettings",
-        "elasticbeanstalk:ValidateConfigurationSettings",
-        "elasticbeanstalk:AbortEnvironmentUpdate",
-        "elasticbeanstalk:RequestEnvironmentInfo",
-        "elasticbeanstalk:RetrieveEnvironmentInfo"
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:InitiateLayerUpload",
+        "ecr:UploadLayerPart",
+        "ecr:CompleteLayerUpload",
+        "ecr:PutImage",
+        "ecr:DescribeRepositories",
+        "ecr:DescribeImages",
+        "ecr:ListImages"
+      ],
+      "Resource": "arn:aws:ecr:us-east-1:939196280422:repository/*"
+    },
+    {
+      "Sid": "ECSDeploy",
+      "Effect": "Allow",
+      "Action": [
+        "ecs:DescribeServices",
+        "ecs:DescribeTaskDefinition",
+        "ecs:RegisterTaskDefinition",
+        "ecs:UpdateService",
+        "ecs:ListTasks",
+        "ecs:DescribeTasks"
       ],
       "Resource": "*"
     },
     {
-      "Sid": "CloudFormationReadForEBStacks",
+      "Sid": "PassExecutionRoleForTasks",
       "Effect": "Allow",
-      "Action": [
-        "cloudformation:GetTemplate",
-        "cloudformation:DescribeStacks",
-        "cloudformation:DescribeStackResources",
-        "cloudformation:DescribeStackResource",
-        "cloudformation:DescribeStackEvents",
-        "cloudformation:ListStackResources",
-        "cloudformation:ValidateTemplate"
-      ],
+      "Action": "iam:PassRole",
       "Resource": "*"
     },
     {
-      "Sid": "AutoScalingReadForElasticBeanstalk",
-      "Effect": "Allow",
-      "Action": [
-        "autoscaling:DescribeAutoScalingGroups",
-        "autoscaling:DescribeAutoScalingInstances",
-        "autoscaling:DescribeScalingActivities",
-        "autoscaling:DescribePolicies",
-        "autoscaling:DescribeLaunchConfigurations",
-        "autoscaling:DescribeScheduledActions"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Sid": "ElasticBeanstalkStagingBucketFullForDeployUser",
+      "Sid": "S3CustomBucketsObjects",
       "Effect": "Allow",
       "Action": [
         "s3:PutObject",
-        "s3:PutObjectAcl",
         "s3:GetObject",
-        "s3:GetObjectAcl",
-        "s3:GetObjectVersion",
-        "s3:DeleteObject",
-        "s3:ListBucket",
-        "s3:GetBucketLocation",
-        "s3:GetBucketPolicy",
-        "s3:PutBucketPolicy",
-        "s3:GetBucketPublicAccessBlock",
-        "s3:PutBucketPublicAccessBlock",
-        "s3:GetEncryptionConfiguration",
-        "s3:PutEncryptionConfiguration",
-        "s3:CreateBucket",
-        "s3:PutLifecycleConfiguration",
-        "s3:GetLifecycleConfiguration"
+        "s3:DeleteObject"
       ],
+      "Resource": [
+        "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME/*"
+      ]
+    },
+    {
+      "Sid": "S3CustomBucketsList",
+      "Effect": "Allow",
+      "Action": [
+        "s3:ListBucket",
+        "s3:GetBucketLocation"
+      ],
+      "Resource": [
+        "arn:aws:s3:::REPLACE_WITH_YOUR_BUCKET_NAME"
+      ]
+    },
+    {
+      "Sid": "S3ElasticBeanstalkAccountBucket",
+      "Effect": "Allow",
+      "Action": "s3:*",
       "Resource": [
         "arn:aws:s3:::elasticbeanstalk-us-east-1-939196280422",
         "arn:aws:s3:::elasticbeanstalk-us-east-1-939196280422/*"
       ]
+    },
+    {
+      "Sid": "ElasticBeanstalkAPI",
+      "Effect": "Allow",
+      "Action": "elasticbeanstalk:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFormationRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:Describe*",
+        "cloudformation:Get*",
+        "cloudformation:List*",
+        "cloudformation:ValidateTemplate",
+        "cloudformation:EstimateTemplateCost"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudFrontInvalidation",
+      "Effect": "Allow",
+      "Action": [
+        "cloudfront:CreateInvalidation",
+        "cloudfront:GetInvalidation",
+        "cloudfront:ListInvalidations"
+      ],
+      "Resource": "arn:aws:cloudfront::939196280422:distribution/*"
+    },
+    {
+      "Sid": "EventBridgeAccess",
+      "Effect": "Allow",
+      "Action": [
+        "events:PutEvents",
+        "events:PutRule",
+        "events:PutTargets"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AutoScalingRead",
+      "Effect": "Allow",
+      "Action": "autoscaling:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ApplicationAutoScalingRead",
+      "Effect": "Allow",
+      "Action": "application-autoscaling:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "EC2Read",
+      "Effect": "Allow",
+      "Action": "ec2:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ElasticLoadBalancingRead",
+      "Effect": "Allow",
+      "Action": "elasticloadbalancing:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsRead",
+      "Effect": "Allow",
+      "Action": [
+        "logs:Describe*",
+        "logs:Get*",
+        "logs:List*",
+        "logs:FilterLogEvents",
+        "logs:StartQuery"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchRead",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:Describe*",
+        "cloudwatch:Get*",
+        "cloudwatch:List*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "RDSRead",
+      "Effect": "Allow",
+      "Action": "rds:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ACMRead",
+      "Effect": "Allow",
+      "Action": [
+        "acm:DescribeCertificate",
+        "acm:ListCertificates"
+      ],
+      "Resource": "*"
     }
   ]
 }
