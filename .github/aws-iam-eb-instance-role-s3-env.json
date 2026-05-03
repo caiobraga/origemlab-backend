@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadAppEnvJson",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": "arn:aws:s3:::YOUR_EB_DEPLOY_BUCKET_NAME/config/elasticbeanstalk-env.json"
+    }
+  ]
+}

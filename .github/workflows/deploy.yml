@@ -2,13 +2,14 @@
 # EB runs `npm start`; PORT is set by the environment (default 8080).
 #
 # GitHub Variables: AWS_REGION, AWS_ROLE_ARN, EB_APPLICATION_NAME, EB_ENVIRONMENT_NAME,
-# EB_DEPLOY_BUCKET (staging bucket name, no s3:// prefix).
-# IAM: .github/aws-iam-policy-beanstalk-deploy.json
+# EB_DEPLOY_BUCKET, optional EB_ENV_S3_KEY (default: config/elasticbeanstalk-env.json).
+# Optional vars merged into S3 env JSON: APP_BASE_URL, CORS_ALLOW_ORIGIN, etc.
 #
-# Repository secrets (synced to EB each deploy via aws:elasticbeanstalk:application:environment):
-#   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
-# Optional secrets (included when set): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
-# Optional vars: APP_BASE_URL, CORS_ALLOW_ORIGIN
+# Repository secrets: used only in CI to build & upload env JSON to S3 (not committed).
+# At runtime the app reads that object via APP_ENV_S3_* (see src/env.ts).
+#
+# IAM (OIDC deploy role): .github/aws-iam-policy-beanstalk-deploy.json
+# IAM (EB EC2 instance): .github/aws-iam-eb-instance-role-s3-env.json
 
 name: deploy
 
@@ -31,18 +32,11 @@ env:
   EB_APPLICATION_NAME: ${{ vars.EB_APPLICATION_NAME }}
   EB_ENVIRONMENT_NAME: ${{ vars.EB_ENVIRONMENT_NAME }}
   EB_DEPLOY_BUCKET: ${{ vars.EB_DEPLOY_BUCKET }}
+  EB_ENV_S3_KEY: ${{ vars.EB_ENV_S3_KEY }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    env:
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-      STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
-      APP_BASE_URL: ${{ vars.APP_BASE_URL }}
-      CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,19 +63,66 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
 
-      - name: Install, build, and deploy to Elastic Beanstalk
+      - name: Install, build, upload env to S3, deploy to Elastic Beanstalk
+        env:
+          EB_ENV_S3_KEY: ${{ vars.EB_ENV_S3_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+          AISELFIE_STRIPE_SECRET_KEY: ${{ secrets.AISELFIE_STRIPE_SECRET_KEY }}
+          AISELFIE_STRIPE_WEBHOOK_SECRET: ${{ secrets.AISELFIE_STRIPE_WEBHOOK_SECRET }}
+          APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
+          AUTH_COOKIE_NAME: ${{ vars.AUTH_COOKIE_NAME }}
+          AUTH_COOKIE_SECURE: ${{ vars.AUTH_COOKIE_SECURE }}
+          OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
+          OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+          OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
         run: |
           set -euo pipefail
           npm ci
           npm run build
 
-          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
-            echo "::error::Set repository secrets SUPABASE_URL and SUPABASE_ANON_KEY (they are pushed to EB as env vars)."
-            exit 1
-          fi
-          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
-            echo "::warning::SUPABASE_SERVICE_ROLE_KEY is empty; API routes that need the service role will fail."
-          fi
+          export EB_ENV_S3_KEY="${EB_ENV_S3_KEY:-config/elasticbeanstalk-env.json}"
+
+          python3 << 'PY'
+          import json, os, sys
+
+          keys = [
+              "SUPABASE_URL",
+              "SUPABASE_ANON_KEY",
+              "SUPABASE_SERVICE_ROLE_KEY",
+              "STRIPE_SECRET_KEY",
+              "STRIPE_WEBHOOK_SECRET",
+              "AISELFIE_STRIPE_SECRET_KEY",
+              "AISELFIE_STRIPE_WEBHOOK_SECRET",
+              "APP_BASE_URL",
+              "CORS_ALLOW_ORIGIN",
+              "AUTH_COOKIE_NAME",
+              "AUTH_COOKIE_SECURE",
+              "OLLAMA_BASE_URL",
+              "OLLAMA_MODEL",
+              "OLLAMA_TIMEOUT_MS",
+          ]
+          data = {}
+          for k in keys:
+              v = (os.environ.get(k) or "").strip()
+              if v:
+                  data[k] = v
+
+          if not data.get("SUPABASE_URL") or not data.get("SUPABASE_ANON_KEY"):
+              print("::error::Secrets SUPABASE_URL and SUPABASE_ANON_KEY are required to build the S3 env JSON.", file=sys.stderr)
+              sys.exit(1)
+
+          with open("elasticbeanstalk-env.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False)
+          print(f"Built elasticbeanstalk-env.json with {len(data)} keys (values not logged).")
+          PY
+
+          aws s3 cp elasticbeanstalk-env.json "s3://${EB_DEPLOY_BUCKET}/${EB_ENV_S3_KEY}"
+          echo "Uploaded s3://${EB_DEPLOY_BUCKET}/${EB_ENV_S3_KEY}"
 
           VERSION_LABEL="origemlab-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
           zip -r bundle.zip \
@@ -133,20 +174,16 @@ jobs:
           import json, os
 
           ns = "aws:elasticbeanstalk:application:environment"
-          keys = [
-              "SUPABASE_URL",
-              "SUPABASE_ANON_KEY",
-              "SUPABASE_SERVICE_ROLE_KEY",
-              "APP_BASE_URL",
-              "CORS_ALLOW_ORIGIN",
-              "STRIPE_SECRET_KEY",
-              "STRIPE_WEBHOOK_SECRET",
+          bucket = os.environ["EB_DEPLOY_BUCKET"]
+          key = (os.environ.get("EB_ENV_S3_KEY") or "").strip() or "config/elasticbeanstalk-env.json"
+          opts = [
+              {"Namespace": ns, "OptionName": "APP_ENV_S3_BUCKET", "Value": bucket},
+              {"Namespace": ns, "OptionName": "APP_ENV_S3_KEY", "Value": key},
+              {"Namespace": ns, "OptionName": "APP_ENV_LOAD_FROM_S3", "Value": "true"},
           ]
-          opts = []
-          for k in keys:
-              v = (os.environ.get(k) or "").strip()
-              if v:
-                  opts.append({"Namespace": ns, "OptionName": k, "Value": v})
+          region = (os.environ.get("AWS_REGION") or "").strip()
+          if region:
+              opts.append({"Namespace": ns, "OptionName": "AWS_REGION", "Value": region})
 
           payload = {
               "EnvironmentName": os.environ["EB_ENVIRONMENT_NAME"],

@@ -2,6 +2,7 @@ node_modules
 dist
 .env
 .env.*
+.nv
 
 # Elastic Beanstalk CI bundle (generated locally or in Actions)
 Dockerrun.aws.json
