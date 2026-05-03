@@ -4,7 +4,11 @@
 # GitHub Variables: AWS_REGION, AWS_ROLE_ARN, EB_APPLICATION_NAME, EB_ENVIRONMENT_NAME,
 # EB_DEPLOY_BUCKET (staging bucket name, no s3:// prefix).
 # IAM: .github/aws-iam-policy-beanstalk-deploy.json
-# Secrets/env da app: EB → Configuration → Software → Environment properties (SUPABASE_*, etc.).
+#
+# Repository secrets (synced to EB each deploy via aws:elasticbeanstalk:application:environment):
+#   SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY
+# Optional secrets (included when set): STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET
+# Optional vars: APP_BASE_URL, CORS_ALLOW_ORIGIN
 
 name: deploy
 
@@ -31,6 +35,14 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+      STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
+      APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+      CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,6 +74,14 @@ jobs:
           set -euo pipefail
           npm ci
           npm run build
+
+          if [ -z "${SUPABASE_URL:-}" ] || [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "::error::Set repository secrets SUPABASE_URL and SUPABASE_ANON_KEY (they are pushed to EB as env vars)."
+            exit 1
+          fi
+          if [ -z "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
+            echo "::warning::SUPABASE_SERVICE_ROLE_KEY is empty; API routes that need the service role will fail."
+          fi
 
           VERSION_LABEL="origemlab-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
           zip -r bundle.zip \
@@ -108,8 +128,35 @@ jobs:
             echo "::warning::Version status is still '${ST:-unknown}'. Continuing with update-environment."
           fi
 
-          aws elasticbeanstalk update-environment \
-            --environment-name "${EB_ENVIRONMENT_NAME}" \
-            --version-label "${VERSION_LABEL}"
+          export VERSION_LABEL
+          python3 << 'PY'
+          import json, os
+
+          ns = "aws:elasticbeanstalk:application:environment"
+          keys = [
+              "SUPABASE_URL",
+              "SUPABASE_ANON_KEY",
+              "SUPABASE_SERVICE_ROLE_KEY",
+              "APP_BASE_URL",
+              "CORS_ALLOW_ORIGIN",
+              "STRIPE_SECRET_KEY",
+              "STRIPE_WEBHOOK_SECRET",
+          ]
+          opts = []
+          for k in keys:
+              v = (os.environ.get(k) or "").strip()
+              if v:
+                  opts.append({"Namespace": ns, "OptionName": k, "Value": v})
+
+          payload = {
+              "EnvironmentName": os.environ["EB_ENVIRONMENT_NAME"],
+              "VersionLabel": os.environ["VERSION_LABEL"],
+              "OptionSettings": opts,
+          }
+          with open("eb-update.json", "w", encoding="utf-8") as f:
+              json.dump(payload, f)
+          PY
+
+          aws elasticbeanstalk update-environment --cli-input-json file://eb-update.json
 
           echo "Deployed version ${VERSION_LABEL} to ${EB_ENVIRONMENT_NAME}"

@@ -77,6 +77,16 @@
       "Resource": "*"
     },
     {
+      "Sid": "CloudFormationUpdateForElasticBeanstalk",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:UpdateStack",
+        "cloudformation:CancelUpdateStack",
+        "cloudformation:ContinueUpdateRollback"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "CloudFrontInvalidation",
       "Effect": "Allow",
       "Action": [
@@ -100,6 +110,28 @@
       "Sid": "AutoScalingRead",
       "Effect": "Allow",
       "Action": "autoscaling:Describe*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AutoScalingDeployForElasticBeanstalk",
+      "Effect": "Allow",
+      "Action": [
+        "autoscaling:SuspendProcesses",
+        "autoscaling:ResumeProcesses",
+        "autoscaling:UpdateAutoScalingGroup",
+        "autoscaling:SetDesiredCapacity",
+        "autoscaling:TerminateInstanceInAutoScalingGroup",
+        "autoscaling:EnterStandby",
+        "autoscaling:ExitStandby",
+        "autoscaling:AttachInstances",
+        "autoscaling:DetachInstances",
+        "autoscaling:PutScalingPolicy",
+        "autoscaling:DeletePolicy",
+        "autoscaling:PutScheduledUpdateGroupAction",
+        "autoscaling:DeleteScheduledAction",
+        "autoscaling:PutLifecycleHook",
+        "autoscaling:DeleteLifecycleHook"
+      ],
       "Resource": "*"
     },
     {
