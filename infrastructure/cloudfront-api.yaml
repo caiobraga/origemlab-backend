@@ -1,0 +1,70 @@
+# CloudFront na frente do Elastic Beanstalk (origem HTTP, viewers HTTPS).
+#
+# Pré-requisitos: EB acessível pelo hostname (ex.: xxx.elasticbeanstalk.com na porta 80).
+#
+# Deploy (na pasta origemlab-backend):
+#   aws cloudformation deploy \
+#     --stack-name origemlab-api-cdn \
+#     --template-file infrastructure/cloudfront-api.yaml \
+#     --parameter-overrides ElasticBeanstalkHostname=origem-backend-env.eba-xxxx.us-east-1.elasticbeanstalk.com
+#
+# Depois: no env da app (S3 JSON / EB), use APP_BASE_URL e VITE_API_BASE_URL com
+# https://<DistributionDomainName>/ e CORS_ALLOW_ORIGIN com os origins do front (HTTPS).
+
+AWSTemplateFormatVersion: "2010-09-09"
+Description: HTTPS edge for OrigemLab API (CloudFront -> EB HTTP origin, no cache)
+
+Parameters:
+  ElasticBeanstalkHostname:
+    Type: String
+    Description: Hostname only (sem http://), ex. origem-backend-env.eba-dapbdr5p.us-east-1.elasticbeanstalk.com
+
+Resources:
+  ApiDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: OrigemLab API via HTTPS (origin EB HTTP)
+        HttpVersion: http2and3
+        PriceClass: PriceClass_100
+        IPV6Enabled: true
+        Origins:
+          - Id: ElasticBeanstalkOrigin
+            DomainName: !Ref ElasticBeanstalkHostname
+            CustomOriginConfig:
+              HTTPPort: 80
+              HTTPSPort: 443
+              OriginProtocolPolicy: http-only
+              OriginSSLProtocols:
+                - TLSv1.2
+        DefaultCacheBehavior:
+          TargetOriginId: ElasticBeanstalkOrigin
+          ViewerProtocolPolicy: redirect-to-https
+          Compress: true
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+            - PUT
+            - POST
+            - PATCH
+            - DELETE
+          CachedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: 4135ea2d-6bc8-4ea3-b95b-e4bbe667978b
+          OriginRequestPolicyId: 216adef6-5c7f-47e4-b989-5492eafa07d3
+        ViewerCertificate:
+          CloudFrontDefaultCertificate: true
+
+Outputs:
+  DistributionId:
+    Description: ID para invalidações / IAM
+    Value: !Ref ApiDistribution
+  DistributionDomainName:
+    Description: Hostname HTTPS (*.cloudfront.net)
+    Value: !GetAtt ApiDistribution.DomainName
+  ApiHttpsUrl:
+    Description: Base URL da API em HTTPS (usa isto no front e em Stripe webhooks)
+    Value: !Sub "https://${ApiDistribution.DomainName}"

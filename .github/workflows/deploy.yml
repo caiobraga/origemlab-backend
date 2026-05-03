@@ -10,6 +10,12 @@
 #
 # IAM (OIDC deploy role): .github/aws-iam-policy-beanstalk-deploy.json
 # IAM (EB EC2 instance): .github/aws-iam-eb-instance-role-s3-env.json
+#
+# HTTPS na API: o URL *.elasticbeanstalk.com é só HTTP. Use CloudFront à frente do EB:
+#   infrastructure/cloudfront-api.yaml (stack CloudFormation — ver comentários no ficheiro).
+# Depois define no JSON de env (S3): APP_BASE_URL=https://<distribution>.cloudfront.net,
+# AUTH_COOKIE_SECURE=true, CORS_ALLOW_ORIGIN com os HTTPS origins do front (vários separados
+# por vírgula, ou * só para testes). No GitHub do front: VITE_API_BASE_URL com o mesmo HTTPS.
 
 name: deploy
 

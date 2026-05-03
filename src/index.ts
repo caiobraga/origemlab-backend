@@ -14,6 +14,10 @@ const gateways = buildGateways(config);
 const usecases = buildUseCases({ config, gateways });
 
 const app = express();
+// CloudFront / ALB / nginx definem X-Forwarded-* — necessário para cookies Secure e URLs corretas.
+if (process.env.TRUST_PROXY !== "false") {
+  app.set("trust proxy", true);
+}
 app.use(corsMiddleware({ allowOrigin: config.corsAllowOrigin }));
 
 app.use(buildRouter({ config, ...usecases }));
