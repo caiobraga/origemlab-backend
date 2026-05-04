@@ -12,7 +12,7 @@ AISELFIE_STRIPE_SECRET_KEY=... AISELFIE_STRIPE_WEBHOOK_SECRET=... \
 APP_BASE_URL=http://localhost:5173 \
 npm run dev
 ```
-
+ 
 
 ## Endpoints
 
