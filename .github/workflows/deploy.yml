@@ -88,7 +88,9 @@ jobs:
           OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
         run: |
           set -euo pipefail
+          : "${AWS_REGION:?AWS_REGION must be set (GitHub Actions variable)}"
           npm ci
+          npm run check
           npm run build
 
           export EB_ENV_S3_KEY="${EB_ENV_S3_KEY:-config/elasticbeanstalk-env.json}"
@@ -142,6 +144,7 @@ jobs:
           aws s3 cp bundle.zip "s3://${EB_DEPLOY_BUCKET}/${KEY}"
 
           aws elasticbeanstalk create-application-version \
+            --region "${AWS_REGION}" \
             --application-name "${EB_APPLICATION_NAME}" \
             --version-label "${VERSION_LABEL}" \
             --source-bundle "S3Bucket=${EB_DEPLOY_BUCKET},S3Key=${KEY}"
@@ -150,6 +153,7 @@ jobs:
           ST=""
           for _ in $(seq 1 36); do
             ST="$(aws elasticbeanstalk describe-application-versions \
+              --region "${AWS_REGION}" \
               --application-name "${EB_APPLICATION_NAME}" \
               --version-labels "${VERSION_LABEL}" \
               --query 'ApplicationVersions[0].Status' --output text 2>/dev/null || echo "")"
@@ -168,11 +172,36 @@ jobs:
             esac
           done
           ST="$(aws elasticbeanstalk describe-application-versions \
+            --region "${AWS_REGION}" \
             --application-name "${EB_APPLICATION_NAME}" \
             --version-labels "${VERSION_LABEL}" \
             --query 'ApplicationVersions[0].Status' --output text 2>/dev/null || echo "")"
           if [ "${ST}" != "PROCESSED" ]; then
             echo "::warning::Version status is still '${ST:-unknown}'. Continuing with update-environment."
+          fi
+
+          # update-environment fails with InvalidParameterValue if the environment is still Updating/Launching.
+          echo "Waiting for environment to be Ready: ${EB_ENVIRONMENT_NAME}"
+          ENV_STATUS=""
+          for i in $(seq 1 60); do
+            ENV_STATUS="$(aws elasticbeanstalk describe-environments \
+              --region "${AWS_REGION}" \
+              --environment-names "${EB_ENVIRONMENT_NAME}" \
+              --query 'Environments[0].Status' --output text 2>/dev/null || echo "")"
+            if [ "${ENV_STATUS}" = "Ready" ]; then
+              echo "Environment is Ready (${i}/60)."
+              break
+            fi
+            echo "  status=${ENV_STATUS:-unknown} (${i}/60), sleep 30s..."
+            sleep 30
+          done
+          ENV_STATUS="$(aws elasticbeanstalk describe-environments \
+            --region "${AWS_REGION}" \
+            --environment-names "${EB_ENVIRONMENT_NAME}" \
+            --query 'Environments[0].Status' --output text 2>/dev/null || echo "")"
+          if [ "${ENV_STATUS}" != "Ready" ]; then
+            echo "::error::Environment is not Ready (got '${ENV_STATUS:-empty}'). Wait or abort stuck operations in the EB console, then re-run."
+            exit 1
           fi
 
           export VERSION_LABEL
@@ -200,6 +229,8 @@ jobs:
               json.dump(payload, f)
           PY
 
-          aws elasticbeanstalk update-environment --cli-input-json file://eb-update.json
+          aws elasticbeanstalk update-environment \
+            --region "${AWS_REGION}" \
+            --cli-input-json file://eb-update.json
 
           echo "Deployed version ${VERSION_LABEL} to ${EB_ENVIRONMENT_NAME}"
