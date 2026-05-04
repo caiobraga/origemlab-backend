@@ -4,6 +4,7 @@ import { loadConfig } from "./config.js";
 import { corsMiddleware } from "./http/cors.js";
 import { errorHandler } from "./http/errors.js";
 import { buildRouter } from "./http/router.js";
+import { installSwagger } from "./http/swagger.js";
 import { buildGateways } from "./infra/gateways.js";
 import { buildUseCases } from "./infra/usecases.js";
 
@@ -21,6 +22,7 @@ if (process.env.TRUST_PROXY !== "false") {
 app.use(corsMiddleware({ allowOrigin: config.corsAllowOrigin }));
 
 app.use(buildRouter({ config, ...usecases }));
+installSwagger(app, config);
 app.use(errorHandler);
 
 const port = config.port;
