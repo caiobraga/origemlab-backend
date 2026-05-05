@@ -6,7 +6,6 @@ const router = express.Router();
 
 const stripeSecret =
   process.env.AISELFIE_STRIPE_SECRET_KEY?.trim() ||
-  process.env.STRIPE_SECRET_KEY?.trim() ||
   "";
 
 function getStripe(): Stripe | null {
@@ -55,7 +54,7 @@ router.post("/stripe/create-checkout-session", async (req, res) => {
   const stripe = getStripe();
   if (!stripe) {
     return res.status(503).json({
-      error: "Stripe não configurado (AISELFIE_STRIPE_SECRET_KEY ou STRIPE_SECRET_KEY)",
+      error: "Stripe não configurado (AISELFIE_STRIPE_SECRET_KEY)",
     });
   }
 

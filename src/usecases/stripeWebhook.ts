@@ -45,7 +45,7 @@ export function buildStripeWebhookUseCase(deps: {
     async handle(req) {
       if (!deps.stripe.hasStripe || !deps.config.stripe.webhookSecret) {
         console.error(
-          "Stripe webhook: AISELFIE_STRIPE_SECRET_KEY/AISELFIE_STRIPE_WEBHOOK_SECRET (or STRIPE_*) missing",
+          "Stripe webhook: AISELFIE_STRIPE_SECRET_KEY/AISELFIE_STRIPE_WEBHOOK_SECRET missing",
         );
         return { status: 503, body: "Stripe not configured" };
       }

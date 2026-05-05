@@ -175,9 +175,7 @@ router.put("/admin/billing/plans/:planKey", async (req, res) => {
   }
 
   const stripeKey =
-    process.env.AISELFIE_STRIPE_SECRET_KEY?.trim() ||
-    process.env.STRIPE_SECRET_KEY?.trim() ||
-    "";
+    process.env.AISELFIE_STRIPE_SECRET_KEY?.trim() || "";
   if (!stripeKey)
     return res
       .status(503)

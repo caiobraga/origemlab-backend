@@ -75,8 +75,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET }}
           AISELFIE_STRIPE_SECRET_KEY: ${{ secrets.AISELFIE_STRIPE_SECRET_KEY }}
           AISELFIE_STRIPE_WEBHOOK_SECRET: ${{ secrets.AISELFIE_STRIPE_WEBHOOK_SECRET }}
           APP_BASE_URL: ${{ vars.APP_BASE_URL }}
@@ -102,8 +100,6 @@ jobs:
               "SUPABASE_URL",
               "SUPABASE_ANON_KEY",
               "SUPABASE_SERVICE_ROLE_KEY",
-              "STRIPE_SECRET_KEY",
-              "STRIPE_WEBHOOK_SECRET",
               "AISELFIE_STRIPE_SECRET_KEY",
               "AISELFIE_STRIPE_WEBHOOK_SECRET",
               "APP_BASE_URL",

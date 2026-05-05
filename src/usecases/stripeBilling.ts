@@ -36,7 +36,7 @@ export function buildStripeBillingUseCases(deps: {
       if (!deps.stripe.hasStripe) {
         return {
           status: 503,
-          body: { error: "Stripe não configurado (AISELFIE_STRIPE_SECRET_KEY ou STRIPE_SECRET_KEY)" },
+          body: { error: "Stripe não configurado (AISELFIE_STRIPE_SECRET_KEY)" },
         };
       }
 

@@ -62,10 +62,8 @@ export function loadConfig(): AppConfig {
     readString("SUPABASE_SERVICE_ROLE_KEY") ?? readString("VITE_SUPABASE_SERVICE_ROLE_KEY");
   const supabaseAnonKey = readString("SUPABASE_ANON_KEY") ?? readString("VITE_SUPABASE_ANON_KEY");
 
-  const stripeSecretKey =
-    readString("AISELFIE_STRIPE_SECRET_KEY") ?? readString("STRIPE_SECRET_KEY");
-  const stripeWebhookSecret =
-    readString("AISELFIE_STRIPE_WEBHOOK_SECRET") ?? readString("STRIPE_WEBHOOK_SECRET");
+  const stripeSecretKey = readString("AISELFIE_STRIPE_SECRET_KEY");
+  const stripeWebhookSecret = readString("AISELFIE_STRIPE_WEBHOOK_SECRET");
 
   return {
     port,
