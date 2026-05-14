@@ -24,6 +24,7 @@ export type AdminUseCases = {
   updateProposta(req: Request): Promise<{ status: number; body: any }>;
   listEditais(req: Request): Promise<{ status: number; body: any }>;
   updateEdital(req: Request): Promise<{ status: number; body: any }>;
+  getEditalDocuments(req: Request): Promise<{ status: number; body: any }>;
   listRedacoes(req: Request): Promise<{ status: number; body: any }>;
   updateRedacaoStatus(req: Request): Promise<{ status: number; body: any }>;
 };
@@ -252,6 +253,16 @@ export function buildAdminUseCases(deps: { config: AppConfig; stripe: StripeGate
 
       const row = await deps.supabase.adminUpdateEdital(id, patch);
       return { status: 200, body: { row } };
+    },
+
+    async getEditalDocuments(req) {
+      await assertAdmin(deps.supabase, req);
+      const id = String(req.params.id || "").trim();
+      if (!id) return { status: 400, body: { error: "id inválido" } };
+      const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit || "50"), 10) || 50));
+      const offset = Math.max(0, parseInt(String(req.query.offset || "0"), 10) || 0);
+      const out = await deps.supabase.adminGetEditalDocuments({ editalId: id, limit, offset });
+      return { status: 200, body: out };
     },
 
     async listRedacoes(req) {

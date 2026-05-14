@@ -57,6 +57,20 @@ export type SupabaseGateway = {
     ativo?: string;
   }): Promise<{ count: number | null; rows: any[] }>;
   adminUpdateEdital(id: string, patch: Record<string, any>): Promise<any>;
+  adminGetEditalDocuments(input: {
+    editalId: string;
+    limit: number;
+    offset: number;
+  }): Promise<{
+    edital_id: string;
+    pdfs: any[];
+    pdfs_total: number;
+    pdfs_processed: number;
+    documents_total: number;
+    documents_missing_embeddings: number;
+    documents_rows: any[];
+    extraction: any | null;
+  }>;
   adminListRedacoes(input: {
     limit: number;
     offset: number;
@@ -480,6 +494,79 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         .single();
       if (error) throw new Error(error.message);
       return data;
+    },
+
+    async adminGetEditalDocuments({ editalId, limit, offset }) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const eid = String(editalId).trim();
+      if (!eid) throw new Error("editalId inválido");
+
+      // PDFs status
+      const { data: pdfsData, error: pdfsErr } = await supabase
+        .from("edital_pdfs")
+        .select("id,file_id,edital_id,caminho_storage,nome_arquivo,url_original,tamanho_bytes,tipo_mime,is_processed")
+        .eq("edital_id", eid)
+        .order("criado_em", { ascending: false });
+      if (pdfsErr) throw new Error(pdfsErr.message);
+      const pdfs = (pdfsData || []) as any[];
+      const pdfs_total = pdfs.length;
+      const pdfs_processed = pdfs.filter((p) => p?.is_processed === true).length;
+
+      // Documents counts
+      const countDocs = await supabase
+        .from("documents")
+        .select("id", { count: "exact", head: true })
+        .eq("metadata->>edital_id", eid);
+      if (countDocs.error) throw new Error(countDocs.error.message);
+      const documents_total = countDocs.count ?? 0;
+
+      const countMissing = await supabase
+        .from("documents")
+        .select("id", { count: "exact", head: true })
+        .eq("metadata->>edital_id", eid)
+        .is("embedding", null);
+      if (countMissing.error) throw new Error(countMissing.error.message);
+      const documents_missing_embeddings = countMissing.count ?? 0;
+
+      // Documents rows (paged) - do not return full embeddings
+      const rangeStart = Math.max(0, offset);
+      const rangeEnd = rangeStart + Math.max(1, limit) - 1;
+      const { data: docsData, error: docsErr } = await supabase
+        .from("documents")
+        .select("id,file_id,content,metadata,embedding")
+        .eq("metadata->>edital_id", eid)
+        .order("id", { ascending: true })
+        .range(rangeStart, rangeEnd);
+      if (docsErr) throw new Error(docsErr.message);
+      const documents_rows = (docsData || []).map((r: any) => ({
+        id: r.id,
+        file_id: r.file_id ?? null,
+        metadata: r.metadata ?? null,
+        has_embedding: Array.isArray(r.embedding) ? r.embedding.length > 0 : Boolean(r.embedding),
+        content_preview:
+          typeof r.content === "string" ? r.content.trim().slice(0, 1200) : "",
+      }));
+
+      // Last extraction results (if available) live in `editais` (not `editais_corretos`)
+      const { data: extraction, error: extErr } = await supabase
+        .from("editais")
+        .select(
+          "id,informacoes_processadas_em,valor_projeto,prazo_inscricao,localizacao,vagas,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,atualizado_em",
+        )
+        .eq("id", eid)
+        .maybeSingle();
+      if (extErr) throw new Error(extErr.message);
+
+      return {
+        edital_id: eid,
+        pdfs,
+        pdfs_total,
+        pdfs_processed,
+        documents_total,
+        documents_missing_embeddings,
+        documents_rows,
+        extraction: extraction || null,
+      };
     },
 
     async adminListRedacoes({ limit, offset, status, userId, propostaId }) {

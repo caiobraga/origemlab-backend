@@ -259,6 +259,14 @@ export function buildRouter(deps: {
   );
 
   router.get(
+    "/api/admin/editais/:id/documents",
+    asyncRoute(async (req, res) => {
+      const out = await deps.admin.getEditalDocuments(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
     "/api/admin/redacoes",
     asyncRoute(async (req, res) => {
       const out = await deps.admin.listRedacoes(req);
