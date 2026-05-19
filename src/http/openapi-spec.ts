@@ -358,6 +358,30 @@ export function buildOpenApiDocument(sessionCookieName: string): Record<string, 
           responses: { "200": { description: "OK" }, "400": e("Validação"), "500": e("Erro") },
         },
       },
+      "/api/analyze-field": {
+        post: {
+          tags: ["AI"],
+          summary: "Analisar campo da proposta (Ollama)",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ImproveTextBody" } } },
+          },
+          responses: { "200": { description: "OK" }, "400": e("Validação"), "500": e("Erro") },
+        },
+      },
+      "/api/ground-field-with-references": {
+        post: {
+          tags: ["AI"],
+          summary: "Embasar campo com pesquisa web + reescrita (Ollama)",
+          description:
+            "Identifica afirmações que precisam de referência, pesquisa na internet (Tavily/Serper) e reescreve com o prompt original.",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { $ref: "#/components/schemas/ImproveTextBody" } } },
+          },
+          responses: { "200": { description: "OK" }, "400": e("Validação"), "500": e("Erro") },
+        },
+      },
       "/api/admin/users": {
         get: {
           tags: ["Admin"],

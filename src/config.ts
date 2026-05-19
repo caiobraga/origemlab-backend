@@ -13,6 +13,12 @@ export type AppConfig = {
     model: string;
     timeoutMs: number;
   };
+  webSearch: {
+    tavilyApiKey: string | null;
+    serperApiKey: string | null;
+    maxQueries: number;
+    maxResults: number;
+  };
   supabase: {
     url: string | null;
     serviceRoleKey: string | null;
@@ -77,6 +83,12 @@ export function loadConfig(): AppConfig {
       baseUrl: ollamaBaseUrl,
       model: ollamaModel,
       timeoutMs: ollamaTimeoutMs,
+    },
+    webSearch: {
+      tavilyApiKey: readString("TAVILY_API_KEY"),
+      serperApiKey: readString("SERPER_API_KEY"),
+      maxQueries: Math.min(8, Math.max(1, readNumber("WEB_SEARCH_MAX_QUERIES", 4))),
+      maxResults: Math.min(10, Math.max(1, readNumber("WEB_SEARCH_MAX_RESULTS", 5))),
     },
     supabase: {
       url: supabaseUrl,

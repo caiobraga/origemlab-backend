@@ -194,6 +194,22 @@ export function buildRouter(deps: {
     }),
   );
 
+  router.post(
+    "/api/analyze-field",
+    asyncRoute(async (req, res) => {
+      const out = await deps.aiText.analyzeField(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/ground-field-with-references",
+    asyncRoute(async (req, res) => {
+      const out = await deps.aiText.groundFieldWithReferences(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
   router.get(
     "/api/admin/users",
     asyncRoute(async (req, res) => {

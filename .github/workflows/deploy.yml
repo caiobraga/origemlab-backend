@@ -6,6 +6,7 @@
 # Optional vars merged into S3 env JSON: APP_BASE_URL, CORS_ALLOW_ORIGIN, etc.
 #
 # Repository secrets: used only in CI to build & upload env JSON to S3 (not committed).
+#   TAVILY_API_KEY (recomendado) ou SERPER_API_KEY — embasamento com pesquisa web nas propostas.
 # At runtime the app reads that object via APP_ENV_S3_* (see src/env.ts).
 #
 # IAM (OIDC deploy role): .github/aws-iam-policy-beanstalk-deploy.json
@@ -84,6 +85,10 @@ jobs:
           OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
           OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
           OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
+          WEB_SEARCH_MAX_QUERIES: ${{ vars.WEB_SEARCH_MAX_QUERIES }}
+          WEB_SEARCH_MAX_RESULTS: ${{ vars.WEB_SEARCH_MAX_RESULTS }}
         run: |
           set -euo pipefail
           : "${AWS_REGION:?AWS_REGION must be set (GitHub Actions variable)}"
@@ -109,6 +114,10 @@ jobs:
               "OLLAMA_BASE_URL",
               "OLLAMA_MODEL",
               "OLLAMA_TIMEOUT_MS",
+              "TAVILY_API_KEY",
+              "SERPER_API_KEY",
+              "WEB_SEARCH_MAX_QUERIES",
+              "WEB_SEARCH_MAX_RESULTS",
           ]
           data = {}
           for k in keys:

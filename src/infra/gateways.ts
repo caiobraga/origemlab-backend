@@ -93,6 +93,10 @@ export type SupabaseGateway = {
   getProfile(userId: string): Promise<any | null>;
   updateProfile(userId: string, patch: Record<string, any>): Promise<any>;
   getReferralStats(userId: string): Promise<{ convites: number; conversoes: number; ganhos: number; potencial: number }>;
+  fetchAiFieldContext(input: {
+    editalId?: string;
+    propostaId?: string;
+  }): Promise<{ editalSummary: string; formSummary: string }>;
 };
 
 function createServiceSupabase(config: AppConfig): SupabaseClient | null {
@@ -679,6 +683,63 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       const ganhos = referrals.reduce((sum, r) => sum + (Number(r.ganhos_referrer) || 0), 0);
       const credito = 50;
       return { convites: referrals.length, conversoes, ganhos: Math.round(ganhos), potencial: conversoes * credito };
+    },
+
+    async fetchAiFieldContext(input) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+
+      let editalId = input.editalId ? String(input.editalId).trim() : "";
+      let formSummary = "";
+
+      if (input.propostaId) {
+        const pid = String(input.propostaId).trim();
+        const { data: prop, error: propErr } = await supabase
+          .from("propostas")
+          .select("edital_id, campos_formulario")
+          .eq("id", pid)
+          .maybeSingle();
+        if (propErr) throw new Error(propErr.message);
+        if (prop?.edital_id && !editalId) editalId = String(prop.edital_id);
+        if (prop?.campos_formulario) {
+          try {
+            const raw = JSON.stringify(prop.campos_formulario);
+            formSummary = raw.length > 6000 ? `${raw.slice(0, 6000)}\n…` : raw;
+          } catch {
+            formSummary = "";
+          }
+        }
+      }
+
+      let editalSummary = "";
+      if (editalId) {
+        const { data: ed, error: edErr } = await supabase
+          .from("editais")
+          .select(
+            "numero,titulo,fonte,orgao,sobre_programa,criterios_elegibilidade,valor_projeto,prazo_inscricao,localizacao,vagas",
+          )
+          .eq("id", editalId)
+          .maybeSingle();
+        if (edErr) throw new Error(edErr.message);
+        if (ed) {
+          const lines = [
+            ed.numero ? `Número: ${ed.numero}` : "",
+            ed.titulo ? `Título: ${ed.titulo}` : "",
+            ed.fonte ? `Fonte: ${ed.fonte}` : "",
+            ed.orgao ? `Órgão: ${ed.orgao}` : "",
+            ed.sobre_programa ? `Sobre: ${String(ed.sobre_programa).slice(0, 1500)}` : "",
+            ed.criterios_elegibilidade
+              ? `Elegibilidade: ${String(ed.criterios_elegibilidade).slice(0, 1200)}`
+              : "",
+            ed.valor_projeto ? `Valor: ${ed.valor_projeto}` : "",
+            ed.prazo_inscricao ? `Prazo: ${ed.prazo_inscricao}` : "",
+            ed.localizacao ? `Local: ${ed.localizacao}` : "",
+            ed.vagas ? `Vagas: ${ed.vagas}` : "",
+          ].filter(Boolean);
+          editalSummary = lines.join("\n");
+        }
+      }
+
+      return { editalSummary, formSummary };
     },
   };
 
