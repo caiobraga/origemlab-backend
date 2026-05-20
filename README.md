@@ -25,6 +25,8 @@ Opcional: `WEB_SEARCH_MAX_QUERIES` (padrão 4), `WEB_SEARCH_MAX_RESULTS` (padrã
 
 O pipeline usa Ollama (`OLLAMA_BASE_URL`, `OLLAMA_MODEL`) para identificar afirmações, gerar consultas, e reescrever o texto com as fontes encontradas.
 
+**Produção:** `OLLAMA_BASE_URL=http://origemlab-ollama-nlb-312422980eebe2d0.elb.us-east-1.amazonaws.com:11434` (variável GitHub + JSON env no S3 do EB).
+
 ### Produção (Elastic Beanstalk)
 
 No GitHub do backend (Settings → Secrets and variables → Actions):
