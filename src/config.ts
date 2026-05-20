@@ -60,7 +60,7 @@ export function loadConfig(): AppConfig {
   const cookieSecure = (readString("AUTH_COOKIE_SECURE") ?? "").toLowerCase() === "true";
 
   const ollamaBaseUrl = normalizeBaseUrl(readString("OLLAMA_BASE_URL") ?? "http://3.81.132.92:11434");
-  const ollamaModel = readString("OLLAMA_MODEL") ?? "qwen2.5:7b";
+  const ollamaModel = readString("OLLAMA_MODEL") ?? "gemma2:2b";
   const ollamaTimeoutMs = readNumber("OLLAMA_TIMEOUT_MS", 180000);
 
   const supabaseUrl = readString("SUPABASE_URL") ?? readString("VITE_SUPABASE_URL");
