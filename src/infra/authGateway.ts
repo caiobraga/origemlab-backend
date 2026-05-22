@@ -1,5 +1,5 @@
-import { createClient } from "@supabase/supabase-js";
 import type { AppConfig } from "../config.js";
+import { createServerSupabaseClient } from "./supabaseClient.js";
 
 export type AuthGateway = {
   signInWithPassword(email: string, password: string): Promise<{
@@ -24,9 +24,7 @@ export function buildSupabaseAuthGateway(config: AppConfig): AuthGateway {
   if (!url || !anonKey) {
     throw new Error("Supabase anon key not configured (SUPABASE_ANON_KEY).");
   }
-  const supabase = createClient(url, anonKey, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-  });
+  const supabase = createServerSupabaseClient(url, anonKey);
 
   return {
     async signInWithPassword(email, password) {

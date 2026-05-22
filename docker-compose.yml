@@ -5,3 +5,9 @@ services:
       - "8080:8080"
     env_file:
       - .env.local
+    environment:
+      # Docker often resolves Supabase (Cloudflare) via IPv6 first and times out.
+      NODE_OPTIONS: "--dns-result-order=ipv4first"
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4

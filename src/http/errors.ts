@@ -17,6 +17,12 @@ export class HttpError extends Error {
 export function errorToHttp(err: unknown): { status: number; body: { error: string } } {
   if (err instanceof HttpError) return { status: err.status, body: { error: err.publicMessage } };
   const msg = err instanceof Error ? err.message : "internal_error";
+  if (msg === "supabase_unreachable") {
+    return {
+      status: 503,
+      body: { error: "Serviço de autenticação indisponível. Tente novamente em instantes." },
+    };
+  }
   return { status: 500, body: { error: msg } };
 }
 

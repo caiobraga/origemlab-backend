@@ -1,6 +1,7 @@
-import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import type { AppConfig } from "../config.js";
+import { createServerSupabaseClient } from "./supabaseClient.js";
 
 export type StripeGateway = {
   hasStripe: boolean;
@@ -103,7 +104,7 @@ function createServiceSupabase(config: AppConfig): SupabaseClient | null {
   const url = config.supabase.url;
   const key = config.supabase.serviceRoleKey;
   if (!url || !key) return null;
-  return createClient(url, key);
+  return createServerSupabaseClient(url, key);
 }
 
 export function buildGateways(config: AppConfig): { stripe: StripeGateway; supabase: SupabaseGateway } {

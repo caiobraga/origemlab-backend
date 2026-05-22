@@ -21,11 +21,35 @@ export type AuthUseCases = {
   requireSessionUserId(req: Request): Promise<string>;
 };
 
+function isSupabaseNetworkError(e: unknown): boolean {
+  const msg = e instanceof Error ? e.message : String(e);
+  return (
+    /fetch failed/i.test(msg) ||
+    /ETIMEDOUT|ENETUNREACH|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT/i.test(msg)
+  );
+}
+
 export function buildAuthUseCases(deps: {
   config: AppConfig;
   sessions: SessionStore;
   auth: AuthGateway;
 }) : AuthUseCases {
+  const refreshInflight = new Map<
+    string,
+    Promise<{ accessToken: string; refreshToken: string; expiresAtMs: number }>
+  >();
+
+  async function refreshSessionLocked(
+    sid: string,
+    refreshToken: string,
+  ): Promise<{ accessToken: string; refreshToken: string; expiresAtMs: number }> {
+    const existing = refreshInflight.get(sid);
+    if (existing) return existing;
+    const p = deps.auth.refresh(refreshToken).finally(() => refreshInflight.delete(sid));
+    refreshInflight.set(sid, p);
+    return p;
+  }
+
   async function requireSessionUserId(req: Request): Promise<string> {
     const sid = getCookie(req, deps.config.auth.cookieName);
     if (!sid) throw new Error("unauthenticated");
@@ -33,8 +57,15 @@ export function buildAuthUseCases(deps: {
     if (!s) throw new Error("unauthenticated");
     // refresh if expiring within 60s
     if (Date.now() > s.expiresAtMs - 60_000) {
-      const refreshed = await deps.auth.refresh(s.refreshToken);
-      deps.sessions.set(sid, { ...s, ...refreshed });
+      try {
+        const refreshed = await refreshSessionLocked(sid, s.refreshToken);
+        deps.sessions.set(sid, { ...s, ...refreshed });
+      } catch (e) {
+        if (isSupabaseNetworkError(e)) {
+          throw new Error("supabase_unreachable");
+        }
+        throw e;
+      }
     }
     return s.userId;
   }

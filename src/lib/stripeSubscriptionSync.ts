@@ -1,5 +1,6 @@
 import Stripe from "stripe";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { createServerSupabaseClient } from "../infra/supabaseClient.js";
 
 function getServiceSupabase(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
@@ -7,7 +8,7 @@ function getServiceSupabase(): SupabaseClient | null {
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
     process.env.VITE_SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) return null;
-  return createClient(url, key);
+  return createServerSupabaseClient(url, key);
 }
 
 export function subscriptionRowFromStripe(
