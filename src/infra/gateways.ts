@@ -107,6 +107,169 @@ function createServiceSupabase(config: AppConfig): SupabaseClient | null {
   return createServerSupabaseClient(url, key);
 }
 
+const INDICACAO_AREA_TERMS: Record<string, string[]> = {
+  tech: ["tecnologia", "tecnológico", "inovação", "software", "digital", "ti", "robótica", "ia", "inteligência artificial"],
+  health: ["saúde", "health", "medicina", "biotecnologia", "farmácia"],
+  agro: ["agro", "agronegócio", "agricultura", "rural", "agrícola", "alimentos"],
+  energy: ["energia", "energético", "sustentável", "renovável", "bioenergia"],
+  bio: ["bio", "biotecnologia", "biologia", "genética"],
+};
+
+function normalizeIndicacaoText(v: unknown): string {
+  return String(v ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function parseIndicacaoDate(v: unknown): Date | null {
+  const s = String(v ?? "").trim();
+  if (!s || /invalid date/i.test(s)) return null;
+  const iso = s.match(/\b\d{4}-\d{2}-\d{2}\b/)?.[0];
+  if (iso) {
+    const d = new Date(`${iso}T00:00:00`);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const br = s.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})\b/);
+  if (br) {
+    const d = new Date(Number(br[3]), Number(br[2]) - 1, Number(br[1]));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function editalIndicacaoDeadline(row: any): Date | null {
+  const timeline = typeof row.timeline_estimada === "string" ? (() => {
+    try {
+      return JSON.parse(row.timeline_estimada);
+    } catch {
+      return null;
+    }
+  })() : row.timeline_estimada;
+  const fases = Array.isArray(timeline?.fases) ? timeline.fases : [];
+  const timelineDates = fases
+    .map((f: any) => parseIndicacaoDate(f?.data_fim) || parseIndicacaoDate(f?.prazo))
+    .filter(Boolean) as Date[];
+  if (timelineDates.length) return new Date(Math.max(...timelineDates.map((d) => d.getTime())));
+
+  const prazo = parseIndicacaoDate(row.prazo_inscricao);
+  if (prazo) return prazo;
+  return parseIndicacaoDate(row.data_encerramento);
+}
+
+function scoreIndicacao(profile: any, edital: any): { score: number; motivos: string[] } {
+  const motivos: string[] = [];
+  let score = 10;
+
+  const userType = String(profile?.user_type || "pesquisador");
+  if (userType === "pesquisador") {
+    if (edital.is_researcher === true) {
+      score += 45;
+      motivos.push("Elegível para pesquisadores/ICTs");
+    } else if (edital.is_researcher === false) {
+      score -= 50;
+      motivos.push("Não parece voltado a pesquisadores");
+    }
+  } else if (userType === "pessoa-empresa") {
+    if (edital.is_company === true) {
+      score += 45;
+      motivos.push("Elegível para empresas/startups");
+    } else if (edital.is_company === false) {
+      score -= 50;
+      motivos.push("Não parece voltado a empresas");
+    }
+  } else {
+    if (edital.is_researcher === true || edital.is_company === true) {
+      score += 35;
+      motivos.push("Compatível com seu tipo de perfil");
+    }
+  }
+
+  const profileArea = String(profile?.area || "").trim();
+  if (profileArea) {
+    const terms = INDICACAO_AREA_TERMS[profileArea] || [profileArea];
+    const haystack = normalizeIndicacaoText(
+      [edital.area, edital.titulo, edital.descricao, edital.sobre_programa, edital.criterios_elegibilidade].join(" "),
+    );
+    const matched = terms.find((t) => haystack.includes(normalizeIndicacaoText(t)));
+    if (matched) {
+      score += 25;
+      motivos.push("Área alinhada ao seu perfil");
+    }
+  }
+
+  const deadline = editalIndicacaoDeadline(edital);
+  if (deadline) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const end = new Date(deadline);
+    end.setHours(23, 59, 59, 999);
+    if (end.getTime() >= today.getTime()) {
+      score += 15;
+      motivos.push("Prazo ainda aberto");
+    } else {
+      score -= 35;
+      motivos.push("Prazo possivelmente encerrado");
+    }
+  } else {
+    score += 5;
+    motivos.push("Prazo não identificado automaticamente");
+  }
+
+  if (edital.valor_projeto || edital.valor) {
+    score += 5;
+    motivos.push("Possui informação de valor/financiamento");
+  }
+  if (edital.sobre_programa || edital.criterios_elegibilidade) score += 5;
+
+  const finalScore = Math.max(0, Math.min(100, Math.round(score)));
+  return { score: finalScore, motivos: [...new Set(motivos)].slice(0, 5) };
+}
+
+async function refreshMyIndicacoesFallback(supabase: SupabaseClient, userId: string, limit: number): Promise<number> {
+  const { data: profile, error: profileError } = await supabase
+    .from("profiles")
+    .select("user_id,user_type,area,curriculum_data")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (profileError) throw new Error(profileError.message);
+
+  const { data: editais, error: editaisError } = await supabase
+    .from("editais_corretos")
+    .select(
+      "id,numero,titulo,descricao,data_encerramento,status,valor,valor_projeto,prazo_inscricao,area,orgao,fonte,link,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,validado_em,criado_em,atualizado_em",
+    )
+    .order("validado_em", { ascending: false })
+    .limit(500);
+  if (editaisError) throw new Error(editaisError.message);
+
+  const ranked = (editais || [])
+    .map((edital: any) => {
+      const scored = scoreIndicacao(profile || { user_type: "pesquisador" }, edital);
+      return { edital, ...scored };
+    })
+    .filter((x) => x.score >= 25)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, Math.min(50, limit)));
+
+  const { error: deleteError } = await supabase.from("edital_indicacoes").delete().eq("user_id", userId);
+  if (deleteError) throw new Error(deleteError.message);
+
+  if (!ranked.length) return 0;
+
+  const rows = ranked.map((x) => ({
+    user_id: userId,
+    edital_id: x.edital.id,
+    score: x.score,
+    motivos: x.motivos,
+    gerado_em: new Date().toISOString(),
+  }));
+  const { error: insertError } = await supabase.from("edital_indicacoes").insert(rows);
+  if (insertError) throw new Error(insertError.message);
+  return rows.length;
+}
+
 export function buildGateways(config: AppConfig): { stripe: StripeGateway; supabase: SupabaseGateway } {
   const supabase = createServiceSupabase(config);
 
@@ -641,7 +804,14 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
     async refreshMyIndicacoes(userId, limit) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
       const { data, error } = await supabase.rpc("refresh_my_indicacoes", { p_user_id: userId, p_limit: limit } as any);
-      if (error) throw new Error(error.message);
+      if (error) {
+        const msg = String(error.message || "");
+        if (/refresh_my_indicacoes|schema cache|function .*not found|could not find the function/i.test(msg)) {
+          console.warn(`[indicacoes] RPC refresh_my_indicacoes ausente; usando fallback local. (${msg})`);
+          return refreshMyIndicacoesFallback(supabase, userId, limit);
+        }
+        throw new Error(error.message);
+      }
       return typeof data === "number" ? data : Number(data ?? 0);
     },
 
@@ -649,13 +819,31 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
       const { data, error } = await supabase
         .from("edital_indicacoes")
-        .select("score,motivos,gerado_em,edital:editais (*)")
+        .select("edital_id,score,motivos,gerado_em")
         .eq("user_id", userId)
         .order("score", { ascending: false })
         .order("gerado_em", { ascending: false })
         .limit(limit);
       if (error) throw new Error(error.message);
-      return data || [];
+      const rows = data || [];
+      const ids = [...new Set(rows.map((r: any) => String(r.edital_id || "").trim()).filter(Boolean))];
+      if (!ids.length) return [];
+
+      const { data: editais, error: editaisError } = await supabase
+        .from("editais_corretos")
+        .select("*")
+        .in("id", ids);
+      if (editaisError) throw new Error(editaisError.message);
+
+      const byId = new Map((editais || []).map((e: any) => [String(e.id), e]));
+      return rows
+        .map((r: any) => ({
+          score: r.score,
+          motivos: r.motivos,
+          gerado_em: r.gerado_em,
+          edital: byId.get(String(r.edital_id)) || null,
+        }))
+        .filter((r: any) => r.edital != null);
     },
 
     async getProfile(userId) {
