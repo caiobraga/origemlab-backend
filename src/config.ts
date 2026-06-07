@@ -59,7 +59,11 @@ export function loadConfig(): AppConfig {
   const appBaseUrl = normalizeBaseUrl(readString("APP_BASE_URL") ?? "");
 
   const cookieName = readString("AUTH_COOKIE_NAME") ?? "origemlab_session";
-  const cookieSecure = (readString("AUTH_COOKIE_SECURE") ?? "").toLowerCase() === "true";
+  const cookieSecureRaw = readString("AUTH_COOKIE_SECURE");
+  const cookieSecure =
+    cookieSecureRaw != null
+      ? cookieSecureRaw.toLowerCase() === "true"
+      : (process.env.NODE_ENV ?? "").toLowerCase() === "production";
 
   const ollamaBaseUrl = normalizeBaseUrl(readString("OLLAMA_BASE_URL") ?? "http://3.81.132.92:11434");
   const ollamaModel = readString("OLLAMA_MODEL") ?? "gemma2:2b";

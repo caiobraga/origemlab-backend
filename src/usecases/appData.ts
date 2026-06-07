@@ -49,36 +49,43 @@ export function buildAppDataUseCases(deps: {
       const fonte = String(req.query.fonte || "").trim();
       const status = String(req.query.status || "").trim();
       const ativo = String(req.query.ativo || "").trim();
-      const { count, rows } = await deps.supabase.adminListEditais({
-        limit,
-        offset,
-        q: q || undefined,
-        fonte: fonte || undefined,
-        status: status || undefined,
-        ativo: ativo || undefined,
-      });
 
-      let visibleRows = rows;
-      const catalogTotal = count ?? rows.length;
-      if (loaded.ctx.tier === "free" && guardDeps.enforce !== false) {
-        const accessedIds = loaded.ctx.entitlements.usage?.editais_views?.accessed_ids ?? [];
-        visibleRows = applyFreeCatalogListLimit(rows, accessedIds);
-      }
-
-      return {
-        status: 200,
-        body: {
-          count: catalogTotal,
+      try {
+        const { count, rows } = await deps.supabase.adminListEditais({
           limit,
           offset,
-          rows: visibleRows,
-          catalog_locked_count:
-            loaded.ctx.tier === "free" && guardDeps.enforce !== false
-              ? Math.max(0, catalogTotal - visibleRows.length)
-              : 0,
-          entitlements: loaded.ctx.entitlements,
-        },
-      };
+          q: q || undefined,
+          fonte: fonte || undefined,
+          status: status || undefined,
+          ativo: ativo || undefined,
+        });
+
+        let visibleRows = rows;
+        const catalogTotal = count ?? rows.length;
+        if (loaded.ctx.tier === "free" && guardDeps.enforce !== false) {
+          const accessedIds = loaded.ctx.entitlements.usage?.editais_views?.accessed_ids ?? [];
+          visibleRows = applyFreeCatalogListLimit(rows, accessedIds);
+        }
+
+        return {
+          status: 200,
+          body: {
+            count: catalogTotal,
+            limit,
+            offset,
+            rows: visibleRows,
+            catalog_locked_count:
+              loaded.ctx.tier === "free" && guardDeps.enforce !== false
+                ? Math.max(0, catalogTotal - visibleRows.length)
+                : 0,
+            entitlements: loaded.ctx.entitlements,
+          },
+        };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Erro ao carregar editais";
+        const status = msg.includes("SUPABASE_SERVICE_ROLE_KEY") ? 503 : 500;
+        return { status, body: { error: msg } };
+      }
     },
 
     async getEdital(req) {
