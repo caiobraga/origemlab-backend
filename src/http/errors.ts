@@ -17,6 +17,9 @@ export class HttpError extends Error {
 export function errorToHttp(err: unknown): { status: number; body: { error: string } } {
   if (err instanceof HttpError) return { status: err.status, body: { error: err.publicMessage } };
   const msg = err instanceof Error ? err.message : "internal_error";
+  if ((err as any)?.code === "LIMIT_FILE_SIZE") {
+    return { status: 413, body: { error: "PDF acima de 48 MB." } };
+  }
   if (msg === "supabase_unreachable") {
     return {
       status: 503,

@@ -1,6 +1,7 @@
 import express from "express";
 import type { AppConfig } from "../config.js";
 import { asyncRoute } from "./errors.js";
+import { curriculumPdfUpload } from "./pdfUpload.js";
 
 import type { StripeBillingUseCases } from "../usecases/stripeBilling.js";
 import type { StripeWebhookUseCase } from "../usecases/stripeWebhook.js";
@@ -8,11 +9,13 @@ import type { AdminUseCases } from "../usecases/admin.js";
 import type { AiTextUseCases } from "../usecases/aiText.js";
 import type { AuthUseCases } from "../usecases/auth.js";
 import type { AppDataUseCases } from "../usecases/appData.js";
+import type { LattesUseCases } from "../usecases/lattes.js";
 
 export function buildRouter(deps: {
   config: AppConfig;
   auth: AuthUseCases;
   app: AppDataUseCases;
+  lattes: LattesUseCases;
   stripeBilling: StripeBillingUseCases;
   stripeWebhook: StripeWebhookUseCase;
   admin: AdminUseCases;
@@ -32,7 +35,25 @@ export function buildRouter(deps: {
     }),
   );
 
+  router.post(
+    "/api/lattes/parse-pdf",
+    curriculumPdfUpload.single("file"),
+    express.json({ limit: "64mb" }),
+    asyncRoute(async (req, res) => {
+      const out = await deps.lattes.parsePdf(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
   router.use(express.json({ limit: "2mb" }));
+
+  router.get(
+    "/api/lattes/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.lattes.getById(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
 
   router.post(
     "/api/auth/sign-in",
@@ -54,6 +75,14 @@ export function buildRouter(deps: {
     "/api/auth/sign-out",
     asyncRoute(async (req, res) => {
       const out = await deps.auth.signOut(req, res);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/auth/sync-supabase",
+    asyncRoute(async (req, res) => {
+      const out = await deps.auth.syncSupabase(req, res);
       res.status(out.status).json(out.body);
     }),
   );
@@ -174,6 +203,14 @@ export function buildRouter(deps: {
     "/api/stripe/create-portal-session",
     asyncRoute(async (req, res) => {
       const out = await deps.stripeBilling.createPortalSession(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/edital-chat",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.editalChat(req);
       res.status(out.status).json(out.body);
     }),
   );

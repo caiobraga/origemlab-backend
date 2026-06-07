@@ -28,6 +28,8 @@ export type AppConfig = {
     secretKey: string | null;
     webhookSecret: string | null;
   };
+  /** When false, skips plan checks (dev only). Default: enforce. */
+  subscriptionEnforce: boolean;
 };
 
 function readString(name: string): string | null {
@@ -99,6 +101,7 @@ export function loadConfig(): AppConfig {
       secretKey: stripeSecretKey,
       webhookSecret: stripeWebhookSecret,
     },
+    subscriptionEnforce: (readString("SUBSCRIPTION_ENFORCE") ?? "true").toLowerCase() !== "false",
   };
 }
 

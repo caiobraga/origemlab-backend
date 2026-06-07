@@ -3,7 +3,8 @@ import type { AppConfig } from "../config.js";
 import type { SupabaseGateway } from "../infra/gateways.js";
 import { ollamaGenerate } from "../infra/ollama.js";
 import { formatReferencesForPrompt, searchWeb, type WebSearchHit } from "../infra/webSearch.js";
-import { getBearerToken } from "../http/auth.js";
+import type { AuthUseCases } from "./auth.js";
+import { requireProSubscription } from "./subscriptionGuard.js";
 
 export type ProposalFieldAiUseCases = {
   generateFieldText(req: Request): Promise<{ status: number; body: any }>;
@@ -222,9 +223,22 @@ async function stepRewriteWithReferences(
 export function buildProposalFieldAiUseCases(deps: {
   config: AppConfig;
   supabase: SupabaseGateway;
+  auth: AuthUseCases;
 }): ProposalFieldAiUseCases {
+  const guardDeps = {
+    supabase: deps.supabase,
+    auth: deps.auth,
+    enforce: deps.config.subscriptionEnforce,
+  };
+
+  async function guardAi(req: Request) {
+    return requireProSubscription(req, guardDeps, "ai_proposal");
+  }
+
   return {
     async generateFieldText(req) {
+      const loaded = await guardAi(req);
+      if (!loaded.ok) return { status: loaded.status, body: loaded.body };
       const parsed = parseFieldBody(req);
       if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
 
@@ -242,6 +256,8 @@ export function buildProposalFieldAiUseCases(deps: {
     },
 
     async improveText(req) {
+      const loaded = await guardAi(req);
+      if (!loaded.ok) return { status: loaded.status, body: loaded.body };
       const parsed = parseFieldBody(req);
       if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
       if (!parsed.body.current_text) {
@@ -270,6 +286,8 @@ export function buildProposalFieldAiUseCases(deps: {
     },
 
     async analyzeField(req) {
+      const loaded = await guardAi(req);
+      if (!loaded.ok) return { status: loaded.status, body: loaded.body };
       const parsed = parseFieldBody(req);
       if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
 
@@ -316,13 +334,10 @@ export function buildProposalFieldAiUseCases(deps: {
     },
 
     async groundFieldWithReferences(req) {
+      const loaded = await guardAi(req);
+      if (!loaded.ok) return { status: loaded.status, body: loaded.body };
       const parsed = parseFieldBody(req);
       if (!parsed.ok) return { status: 400, body: { error: parsed.error } };
-
-      const token = getBearerToken(req);
-      if (token) {
-        await deps.supabase.getUserFromAccessToken(token);
-      }
 
       const ctx = await resolveContext(deps, parsed.body);
       const currentText = parsed.body.current_text;

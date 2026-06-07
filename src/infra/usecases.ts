@@ -8,6 +8,7 @@ import { buildAuthUseCases } from "../usecases/auth.js";
 import { createInMemorySessionStore } from "./sessionStore.js";
 import { buildSupabaseAuthGateway } from "./authGateway.js";
 import { buildAppDataUseCases } from "../usecases/appData.js";
+import { buildLattesUseCases } from "../usecases/lattes.js";
 
 export function buildUseCases(deps: { config: AppConfig; gateways: { stripe: StripeGateway; supabase: SupabaseGateway } }) {
   const sessions = createInMemorySessionStore();
@@ -15,6 +16,7 @@ export function buildUseCases(deps: { config: AppConfig; gateways: { stripe: Str
   const auth = buildAuthUseCases({ config: deps.config, sessions, auth: authGateway });
   return {
     auth,
+    lattes: buildLattesUseCases({ auth }),
     stripeBilling: buildStripeBillingUseCases({
       config: deps.config,
       stripe: deps.gateways.stripe,
@@ -33,6 +35,7 @@ export function buildUseCases(deps: { config: AppConfig; gateways: { stripe: Str
     aiText: buildAiTextUseCases({
       config: deps.config,
       supabase: deps.gateways.supabase,
+      auth,
     }),
     app: buildAppDataUseCases({
       config: deps.config,

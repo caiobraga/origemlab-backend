@@ -5,7 +5,11 @@ import { buildProposalFieldAiUseCases, type ProposalFieldAiUseCases } from "./pr
 
 export type AiTextUseCases = ProposalFieldAiUseCases;
 
-export function buildAiTextUseCases(deps: { config: AppConfig; supabase: SupabaseGateway }): AiTextUseCases {
+export function buildAiTextUseCases(deps: {
+  config: AppConfig;
+  supabase: SupabaseGateway;
+  auth: AuthUseCases;
+}): AiTextUseCases {
   return buildProposalFieldAiUseCases(deps);
 }
 

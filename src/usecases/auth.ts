@@ -17,6 +17,7 @@ export type AuthUseCases = {
   signIn(req: Request, res: Response): Promise<{ status: number; body: any }>;
   signUp(req: Request, res: Response): Promise<{ status: number; body: any }>;
   signOut(_req: Request, res: Response): Promise<{ status: number; body: any }>;
+  syncSupabase(req: Request, res: Response): Promise<{ status: number; body: any }>;
   me(req: Request): Promise<{ status: number; body: any }>;
   requireSessionUserId(req: Request): Promise<string>;
 };
@@ -27,6 +28,13 @@ function isSupabaseNetworkError(e: unknown): boolean {
     /fetch failed/i.test(msg) ||
     /ETIMEDOUT|ENETUNREACH|ECONNREFUSED|UND_ERR_CONNECT_TIMEOUT/i.test(msg)
   );
+}
+
+function extractBearerToken(req: Request): string | null {
+  const h = req.headers.authorization;
+  if (!h || typeof h !== "string") return null;
+  const m = h.match(/^Bearer\s+(.+)$/i);
+  return m?.[1]?.trim() || null;
 }
 
 export function buildAuthUseCases(deps: {
@@ -52,22 +60,31 @@ export function buildAuthUseCases(deps: {
 
   async function requireSessionUserId(req: Request): Promise<string> {
     const sid = getCookie(req, deps.config.auth.cookieName);
-    if (!sid) throw new Error("unauthenticated");
-    const s = deps.sessions.get(sid);
-    if (!s) throw new Error("unauthenticated");
-    // refresh if expiring within 60s
-    if (Date.now() > s.expiresAtMs - 60_000) {
-      try {
-        const refreshed = await refreshSessionLocked(sid, s.refreshToken);
-        deps.sessions.set(sid, { ...s, ...refreshed });
-      } catch (e) {
-        if (isSupabaseNetworkError(e)) {
-          throw new Error("supabase_unreachable");
+    if (sid) {
+      const s = deps.sessions.get(sid);
+      if (s) {
+        if (Date.now() > s.expiresAtMs - 60_000) {
+          try {
+            const refreshed = await refreshSessionLocked(sid, s.refreshToken);
+            deps.sessions.set(sid, { ...s, ...refreshed });
+          } catch (e) {
+            if (isSupabaseNetworkError(e)) {
+              throw new Error("supabase_unreachable");
+            }
+            throw e;
+          }
         }
-        throw e;
+        return s.userId;
       }
     }
-    return s.userId;
+
+    const bearer = extractBearerToken(req);
+    if (bearer) {
+      const userId = await deps.auth.getUserIdFromAccessToken(bearer);
+      if (userId) return userId;
+    }
+
+    throw new Error("unauthenticated");
   }
 
   return {
@@ -120,13 +137,50 @@ export function buildAuthUseCases(deps: {
       return { status: 200, body: { ok: true } };
     },
 
+    async syncSupabase(req, res) {
+      const accessToken = String((req as any).body?.accessToken || "").trim();
+      const refreshToken = String((req as any).body?.refreshToken || "").trim();
+      let expiresAtMs = Number((req as any).body?.expiresAtMs);
+      if (!accessToken) return { status: 400, body: { error: "accessToken obrigatório" } };
+
+      const userId = await deps.auth.getUserIdFromAccessToken(accessToken);
+      if (!userId) return { status: 401, body: { error: "invalid_token" } };
+
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+        expiresAtMs = Date.now() + 3600_000;
+      }
+
+      const sid = newSessionId();
+      deps.sessions.set(sid, {
+        userId,
+        accessToken,
+        refreshToken,
+        expiresAtMs,
+      });
+      setHttpOnlyCookie(res, {
+        name: deps.config.auth.cookieName,
+        value: sid,
+        secure: deps.config.auth.cookieSecure,
+        maxAgeSeconds: sessionMaxAgeSeconds(),
+      });
+      return { status: 200, body: { ok: true, user: { id: userId } } };
+    },
+
     async me(req) {
       try {
         const sid = getCookie(req, deps.config.auth.cookieName);
-        if (!sid) return { status: 200, body: { user: null } };
-        const s = deps.sessions.get(sid);
-        if (!s) return { status: 200, body: { user: null } };
-        return { status: 200, body: { user: { id: s.userId, email: s.email ?? null } } };
+        if (sid) {
+          const s = deps.sessions.get(sid);
+          if (s) return { status: 200, body: { user: { id: s.userId, email: s.email ?? null } } };
+        }
+
+        const bearer = extractBearerToken(req);
+        if (bearer) {
+          const userId = await deps.auth.getUserIdFromAccessToken(bearer);
+          if (userId) return { status: 200, body: { user: { id: userId, email: null } } };
+        }
+
+        return { status: 200, body: { user: null } };
       } catch {
         return { status: 200, body: { user: null } };
       }

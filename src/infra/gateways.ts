@@ -2,6 +2,8 @@ import type { SupabaseClient, User } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import type { AppConfig } from "../config.js";
 import { createServerSupabaseClient } from "./supabaseClient.js";
+import { isEditalAtivoByDatePatterns } from "../lib/editalActiveByDatePatterns.js";
+import { currentMonthKey, FREE_EDITAIS_PER_MONTH } from "../lib/subscriptionEntitlements.js";
 
 export type StripeGateway = {
   hasStripe: boolean;
@@ -98,6 +100,19 @@ export type SupabaseGateway = {
     editalId?: string;
     propostaId?: string;
   }): Promise<{ editalSummary: string; formSummary: string }>;
+  fetchEditalChatContext(input: {
+    editalId: string;
+    query: string;
+    maxChunks?: number;
+  }): Promise<{ editalSummary: string; excerpts: string[] }>;
+  getEditalCatalogUsage(userId: string): Promise<{ used: number; accessedIds: string[] }>;
+  getEditalCatalogUsageCount(userId: string): Promise<number>;
+  recordEditalCatalogAccess(
+    userId: string,
+    editalId: string,
+    limit: number,
+  ): Promise<{ allowed: boolean; used: number; limit: number; accessedIds: string[] }>;
+  adminGetEditalById(id: string): Promise<any | null>;
 };
 
 function createServiceSupabase(config: AppConfig): SupabaseClient | null {
@@ -120,6 +135,20 @@ function normalizeIndicacaoText(v: unknown): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+const EDITAL_USAGE_METRIC = "edital_catalog_views";
+const memEditalUsage = new Map<string, { period: string; ids: Set<string> }>();
+
+function memEditalUsageBucket(userId: string) {
+  const period = currentMonthKey();
+  const cur = memEditalUsage.get(userId);
+  if (!cur || cur.period !== period) {
+    const next = { period, ids: new Set<string>() };
+    memEditalUsage.set(userId, next);
+    return next;
+  }
+  return cur;
 }
 
 function parseIndicacaoDate(v: unknown): Date | null {
@@ -511,89 +540,17 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
     async adminListEditais({ limit, offset, q: qtext, fonte, status, ativo }) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
 
-      // Dashboard filtering logic (ported from originlab/server/api/admin.ts)
-      const startOfToday = () => {
-        const d = new Date();
-        d.setHours(0, 0, 0, 0);
-        return d;
-      };
-      const parseDate = (raw: unknown): Date | null => {
-        if (raw == null) return null;
-        const s = String(raw).trim();
-        if (!s || /invalid date/i.test(s)) return null;
-        const d = new Date(s);
-        return isNaN(d.getTime()) ? null : d;
-      };
-      const extrairDeadlineSubmissao = (timeline: any): Date | null => {
-        if (!timeline) return null;
-        const obj =
-          typeof timeline === "string"
-            ? (() => {
-                try {
-                  return JSON.parse(timeline);
-                } catch {
-                  return null;
-                }
-              })()
-            : timeline;
-        if (!obj) return null;
-        const fases = obj?.fases;
-        if (!Array.isArray(fases) || fases.length === 0) return null;
-        const withDates = fases
-          .map((f: any) => {
-            const nome = String(f?.nome || "").toLowerCase();
-            const df = parseDate(f?.data_fim) || null;
-            return { nome, df };
-          })
-          .filter((x: any) => x.df);
-        if (withDates.length === 0) return null;
-        const submissao = withDates.filter(
-          (x: any) => x.nome.includes("submiss") || x.nome.includes("propost"),
-        );
-        const arr = (submissao.length ? submissao : withDates) as Array<{ df: Date }>;
-        const max = new Date(Math.max(...arr.map((x) => x.df.getTime())));
-        return isNaN(max.getTime()) ? null : max;
-      };
-      const extrairDataMaisRecentePrazo = (prazo: string | null | undefined): Date | null => {
-        if (!prazo || prazo === "Não informado") return null;
-        const s = String(prazo);
-        const dates: Date[] = [];
-        const pushIf = (v: string) => {
-          const d = parseDate(v);
-          if (d) dates.push(d);
-        };
-        (s.match(/\d{4}-\d{2}-\d{2}/g) || []).forEach(pushIf);
-        (s.match(/\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{4}/g) || []).forEach(pushIf);
-        (s.match(/\b\d{1,2}\s+de\s+[A-Za-zÀ-ÿçÇ]+\s+de\s+\d{4}\b/gi) || []).forEach(pushIf);
-        if (dates.length === 0) return null;
-        const max = new Date(Math.max(...dates.map((d) => d.getTime())));
-        return isNaN(max.getTime()) ? null : max;
-      };
-      const isEditalAtivoDashboard = (row: any): boolean => {
-        const hoje = startOfToday();
-        const dl = extrairDeadlineSubmissao(row.timeline_estimada);
-        if (dl) {
-          const fim = new Date(dl);
-          fim.setHours(23, 59, 59, 999);
-          return hoje.getTime() <= fim.getTime();
-        }
-        const prazoDate = extrairDataMaisRecentePrazo(row.prazo_inscricao || null);
-        if (prazoDate) {
-          const fim = new Date(prazoDate);
-          fim.setHours(23, 59, 59, 999);
-          return hoje.getTime() <= fim.getTime();
-        }
-        if (row.data_encerramento) {
-          const d = parseDate(row.data_encerramento);
-          if (d) {
-            d.setHours(23, 59, 59, 999);
-            return hoje.getTime() <= d.getTime();
-          }
-        }
-        const st = String(row.status || "").toLowerCase().trim();
-        if (st === "encerrado" || st === "finalizado") return false;
-        return true;
-      };
+      // Dashboard: edital ativo = janela MM/AAAA (mês atual → dez) + anos +1…+4
+      const isEditalAtivoDashboard = (row: any): boolean =>
+        isEditalAtivoByDatePatterns({
+          titulo: row.titulo,
+          descricao: row.descricao,
+          prazo_inscricao: row.prazo_inscricao,
+          data_encerramento: row.data_encerramento,
+          timeline_estimada: row.timeline_estimada,
+          status: row.status,
+          numero: row.numero,
+        });
 
       if (ativo === "dashboard") {
         let q = supabase
@@ -623,7 +580,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       let q = supabase
         .from("editais_corretos")
         .select(
-          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,prazo_inscricao,area,orgao,link,is_researcher,is_company,validado_em,criado_em,atualizado_em",
+          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,validado_em,criado_em,atualizado_em",
           { count: "exact" },
         )
         .order("validado_em", { ascending: false });
@@ -648,6 +605,21 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       const { data, error, count } = await q;
       if (error) throw new Error(error.message);
       return { count: count ?? null, rows: data || [] };
+    },
+
+    async adminGetEditalById(id) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const safeId = String(id || "").trim();
+      if (!safeId) return null;
+      const { data, error } = await supabase
+        .from("editais_corretos")
+        .select(
+          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,sobre_programa,criterios_elegibilidade,localizacao,vagas,validado_em,criado_em,atualizado_em",
+        )
+        .eq("id", safeId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data ?? null;
     },
 
     async adminUpdateEdital(id, patch) {
@@ -929,6 +901,183 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       }
 
       return { editalSummary, formSummary };
+    },
+
+    async fetchEditalChatContext(input) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const editalId = String(input.editalId || "").trim();
+      if (!editalId) throw new Error("editalId inválido");
+      const maxChunks = Math.min(6, Math.max(1, input.maxChunks ?? 4));
+
+      let ed: Record<string, any> | null = null;
+      const { data: correto, error: corrErr } = await supabase
+        .from("editais_corretos")
+        .select(
+          "numero,titulo,fonte,orgao,descricao,sobre_programa,criterios_elegibilidade,valor_projeto,prazo_inscricao,localizacao,vagas,timeline_estimada",
+        )
+        .eq("id", editalId)
+        .maybeSingle();
+      if (corrErr) throw new Error(corrErr.message);
+      if (correto) ed = correto as Record<string, any>;
+      else {
+        const { data: raw, error: rawErr } = await supabase
+          .from("editais")
+          .select(
+            "numero,titulo,fonte,orgao,descricao,sobre_programa,criterios_elegibilidade,valor_projeto,prazo_inscricao,localizacao,vagas,timeline_estimada",
+          )
+          .eq("id", editalId)
+          .maybeSingle();
+        if (rawErr) throw new Error(rawErr.message);
+        ed = (raw as Record<string, any>) || null;
+      }
+
+      let editalSummary = "";
+      if (ed) {
+        const lines = [
+          ed.numero ? `Número: ${ed.numero}` : "",
+          ed.titulo ? `Título: ${ed.titulo}` : "",
+          ed.fonte ? `Fonte: ${ed.fonte}` : "",
+          ed.orgao ? `Órgão: ${ed.orgao}` : "",
+          ed.descricao ? `Descrição: ${String(ed.descricao).slice(0, 800)}` : "",
+          ed.sobre_programa ? `Sobre: ${String(ed.sobre_programa).slice(0, 1200)}` : "",
+          ed.criterios_elegibilidade
+            ? `Elegibilidade: ${String(ed.criterios_elegibilidade).slice(0, 1000)}`
+            : "",
+          ed.valor_projeto ? `Valor: ${ed.valor_projeto}` : "",
+          ed.prazo_inscricao ? `Prazo: ${ed.prazo_inscricao}` : "",
+          ed.localizacao ? `Local: ${ed.localizacao}` : "",
+          ed.vagas ? `Vagas: ${ed.vagas}` : "",
+        ].filter(Boolean);
+        editalSummary = lines.join("\n");
+      }
+
+      const { data: docs, error: docsErr } = await supabase
+        .from("documents")
+        .select("content")
+        .eq("metadata->>edital_id", editalId)
+        .not("content", "is", null)
+        .order("id", { ascending: true })
+        .limit(24);
+      if (docsErr) throw new Error(docsErr.message);
+
+      const queryWords = String(input.query || "")
+        .toLowerCase()
+        .split(/\s+/)
+        .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ""))
+        .filter((w) => w.length > 3);
+
+      const scored = (docs || [])
+        .map((row: any) => {
+          const content = String(row?.content || "").trim();
+          if (!content) return { content: "", score: 0 };
+          const lower = content.toLowerCase();
+          let score = 0;
+          for (const w of queryWords) {
+            if (lower.includes(w)) score += 1;
+          }
+          return { content, score };
+        })
+        .filter((x) => x.content);
+
+      scored.sort((a, b) => b.score - a.score || b.content.length - a.content.length);
+      const withHits = scored.filter((x) => x.score > 0);
+      const pool = withHits.length > 0 ? withHits : scored;
+      const excerpts = pool.slice(0, maxChunks).map((x) => x.content.slice(0, 1800));
+
+      return { editalSummary, excerpts };
+    },
+
+    async getEditalCatalogUsage(userId) {
+      if (!supabase) {
+        const bucket = memEditalUsageBucket(userId);
+        return { used: bucket.ids.size, accessedIds: [...bucket.ids] };
+      }
+      const periodKey = currentMonthKey();
+      const { data, error } = await supabase
+        .from("subscription_usage")
+        .select("unique_ids")
+        .eq("user_id", userId)
+        .eq("metric", EDITAL_USAGE_METRIC)
+        .eq("period_key", periodKey)
+        .maybeSingle();
+      if (error) {
+        if (error.code === "42P01") {
+          const bucket = memEditalUsageBucket(userId);
+          return { used: bucket.ids.size, accessedIds: [...bucket.ids] };
+        }
+        throw new Error(error.message);
+      }
+      const accessedIds = Array.isArray((data as any)?.unique_ids)
+        ? (data as any).unique_ids.map(String)
+        : [];
+      return { used: accessedIds.length, accessedIds };
+    },
+
+    async getEditalCatalogUsageCount(userId) {
+      const usage = await this.getEditalCatalogUsage(userId);
+      return usage.used;
+    },
+
+    async recordEditalCatalogAccess(userId, editalId, limit) {
+      const safeLimit = Math.max(1, limit || FREE_EDITAIS_PER_MONTH);
+      const edital = String(editalId || "").trim();
+      if (!edital) return { allowed: false, used: 0, limit: safeLimit, accessedIds: [] };
+
+      const recordInMemory = () => {
+        const bucket = memEditalUsageBucket(userId);
+        if (bucket.ids.has(edital)) {
+          return { allowed: true, used: bucket.ids.size, limit: safeLimit, accessedIds: [...bucket.ids] };
+        }
+        if (bucket.ids.size >= safeLimit) {
+          return { allowed: false, used: bucket.ids.size, limit: safeLimit, accessedIds: [...bucket.ids] };
+        }
+        bucket.ids.add(edital);
+        return { allowed: true, used: bucket.ids.size, limit: safeLimit, accessedIds: [...bucket.ids] };
+      };
+
+      if (!supabase) return recordInMemory();
+
+      const periodKey = currentMonthKey();
+      const { data, error } = await supabase
+        .from("subscription_usage")
+        .select("unique_ids,count")
+        .eq("user_id", userId)
+        .eq("metric", EDITAL_USAGE_METRIC)
+        .eq("period_key", periodKey)
+        .maybeSingle();
+
+      if (error) {
+        if (error.code === "42P01") return recordInMemory();
+        throw new Error(error.message);
+      }
+
+      const ids: string[] = Array.isArray((data as any)?.unique_ids)
+        ? (data as any).unique_ids.map(String)
+        : [];
+      if (ids.includes(edital)) {
+        return { allowed: true, used: ids.length, limit: safeLimit, accessedIds: ids };
+      }
+      if (ids.length >= safeLimit) {
+        return { allowed: false, used: ids.length, limit: safeLimit, accessedIds: ids };
+      }
+
+      const nextIds = [...ids, edital];
+      const row = {
+        user_id: userId,
+        metric: EDITAL_USAGE_METRIC,
+        period_key: periodKey,
+        count: nextIds.length,
+        unique_ids: nextIds,
+        updated_at: new Date().toISOString(),
+      };
+      const { error: upsertErr } = await supabase
+        .from("subscription_usage")
+        .upsert(row, { onConflict: "user_id,metric,period_key" });
+      if (upsertErr) {
+        if (upsertErr.code === "42P01") return recordInMemory();
+        throw new Error(upsertErr.message);
+      }
+      return { allowed: true, used: nextIds.length, limit: safeLimit, accessedIds: nextIds };
     },
   };
 

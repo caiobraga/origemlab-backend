@@ -19,8 +19,8 @@ export function setHttpOnlyCookie(res: Response, opts: {
     "Set-Cookie",
     cookie.serialize(opts.name, opts.value, {
       httpOnly: true,
-      // If secure (HTTPS), allow cross-site (CloudFront/AppRunner different domains).
-      sameSite: opts.secure ? "none" : "lax",
+      // Cross-origin API (front :3000 → backend :8080 / CloudFront): None funciona em localhost mesmo sem Secure.
+      sameSite: "none",
       path: "/",
       secure: opts.secure,
       maxAge: opts.maxAgeSeconds,
@@ -33,7 +33,7 @@ export function clearCookie(res: Response, opts: { name: string; secure: boolean
     "Set-Cookie",
     cookie.serialize(opts.name, "", {
       httpOnly: true,
-      sameSite: opts.secure ? "none" : "lax",
+      sameSite: "none",
       path: "/",
       secure: opts.secure,
       expires: new Date(0),
