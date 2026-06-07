@@ -19,7 +19,13 @@ const app = express();
 if (process.env.TRUST_PROXY !== "false") {
   app.set("trust proxy", true);
 }
-app.use(corsMiddleware({ allowOrigin: config.corsAllowOrigin }));
+app.use(
+  corsMiddleware({
+    allowOrigin: config.corsAllowOrigin,
+    appBaseUrl: config.appBaseUrl,
+    frontOrigins: config.frontOrigins,
+  }),
+);
 
 app.use(buildRouter({ config, ...usecases }));
 installSwagger(app, config);

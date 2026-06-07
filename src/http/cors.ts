@@ -44,8 +44,34 @@ function isOriginAllowed(origin: string, allow: string[], wildcard: boolean): bo
   return false;
 }
 
-export function corsMiddleware(opts: { allowOrigin: string }) {
-  const allow = parseAllowList(opts.allowOrigin || "*");
+function mergeAllowOrigins(...lists: string[]): string[] {
+  const out = new Set<string>();
+  for (const raw of lists) {
+    for (const entry of parseAllowList(raw)) {
+      out.add(normalizeOriginLike(entry));
+    }
+  }
+  return [...out];
+}
+
+export function buildCorsAllowList(opts: {
+  allowOrigin: string;
+  appBaseUrl?: string;
+  frontOrigins?: string;
+}): string[] {
+  return mergeAllowOrigins(
+    opts.allowOrigin || "*",
+    opts.appBaseUrl || "",
+    opts.frontOrigins || "",
+  );
+}
+
+export function corsMiddleware(opts: {
+  allowOrigin: string;
+  appBaseUrl?: string;
+  frontOrigins?: string;
+}) {
+  const allow = buildCorsAllowList(opts);
   const wildcard = allow.includes("*");
 
   return (req: Request, res: Response, next: () => void) => {

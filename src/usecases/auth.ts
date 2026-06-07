@@ -109,7 +109,15 @@ export function buildAuthUseCases(deps: {
           secure: deps.config.auth.cookieSecure,
           maxAgeSeconds: sessionMaxAgeSeconds(),
         });
-        return { status: 200, body: { ok: true } };
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            accessToken: session.accessToken,
+            expiresAtMs: session.expiresAtMs,
+            user: { id: session.userId, email: session.email ?? null },
+          },
+        };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao fazer login";
         return { status: 401, body: { error: msg } };

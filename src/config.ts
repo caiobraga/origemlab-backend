@@ -2,8 +2,10 @@ export type AppConfig = {
   port: number;
   /** Comma-separated origins or '*' */
   corsAllowOrigin: string;
-  /** Base URL do app (front) para redirects do Stripe */
+  /** Base URL do app (front) para redirects do Stripe e CORS */
   appBaseUrl: string;
+  /** Origens extras do front (CSV), ex.: CloudFront + S3 website */
+  frontOrigins: string;
   auth: {
     cookieName: string;
     cookieSecure: boolean;
@@ -57,6 +59,7 @@ export function loadConfig(): AppConfig {
 
   // If empty, the HTTP layer may fall back to request Origin.
   const appBaseUrl = normalizeBaseUrl(readString("APP_BASE_URL") ?? "");
+  const frontOrigins = readString("FRONT_ORIGINS") ?? "";
 
   const cookieName = readString("AUTH_COOKIE_NAME") ?? "origemlab_session";
   const cookieSecureRaw = readString("AUTH_COOKIE_SECURE");
@@ -81,6 +84,7 @@ export function loadConfig(): AppConfig {
     port,
     corsAllowOrigin,
     appBaseUrl,
+    frontOrigins,
     auth: {
       cookieName,
       cookieSecure,

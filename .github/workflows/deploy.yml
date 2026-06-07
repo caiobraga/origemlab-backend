@@ -79,6 +79,7 @@ jobs:
           AISELFIE_STRIPE_SECRET_KEY: ${{ secrets.AISELFIE_STRIPE_SECRET_KEY }}
           AISELFIE_STRIPE_WEBHOOK_SECRET: ${{ secrets.AISELFIE_STRIPE_WEBHOOK_SECRET }}
           APP_BASE_URL: ${{ vars.APP_BASE_URL }}
+          FRONT_ORIGINS: ${{ vars.FRONT_ORIGINS }}
           CORS_ALLOW_ORIGIN: ${{ vars.CORS_ALLOW_ORIGIN }}
           AUTH_COOKIE_NAME: ${{ vars.AUTH_COOKIE_NAME }}
           AUTH_COOKIE_SECURE: ${{ vars.AUTH_COOKIE_SECURE }}
@@ -108,6 +109,7 @@ jobs:
               "AISELFIE_STRIPE_SECRET_KEY",
               "AISELFIE_STRIPE_WEBHOOK_SECRET",
               "APP_BASE_URL",
+              "FRONT_ORIGINS",
               "CORS_ALLOW_ORIGIN",
               "AUTH_COOKIE_NAME",
               "AUTH_COOKIE_SECURE",
@@ -128,6 +130,22 @@ jobs:
           if not data.get("SUPABASE_URL") or not data.get("SUPABASE_ANON_KEY"):
               print("::error::Secrets SUPABASE_URL and SUPABASE_ANON_KEY are required to build the S3 env JSON.", file=sys.stderr)
               sys.exit(1)
+
+          # CORS must list the FRONT origin(s), not only the API host. Merge APP_BASE_URL + FRONT_ORIGINS.
+          cors_parts = []
+          for k in ("CORS_ALLOW_ORIGIN", "APP_BASE_URL", "FRONT_ORIGINS"):
+              v = (data.get(k) or "").strip()
+              if v:
+                  cors_parts.append(v)
+          if cors_parts:
+              merged = []
+              seen = set()
+              for chunk in ",".join(cors_parts).split(","):
+                  origin = chunk.strip().rstrip("/")
+                  if origin and origin not in seen:
+                      seen.add(origin)
+                      merged.append(origin)
+              data["CORS_ALLOW_ORIGIN"] = ",".join(merged)
 
           with open("elasticbeanstalk-env.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False)
