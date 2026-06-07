@@ -5,9 +5,6 @@ import type { AuthUseCases } from "./auth.js";
 import { handleEditalChat } from "./editalChat.js";
 import {
   FREE_EDITAIS_PER_MONTH,
-  applyFreeCatalogListLimit,
-  canAccessEditalCatalog,
-  subscriptionLimitBody,
 } from "../lib/subscriptionEntitlements.js";
 import { loadSubscriptionContext, requireProSubscription } from "./subscriptionGuard.js";
 
@@ -60,12 +57,11 @@ export function buildAppDataUseCases(deps: {
           ativo: ativo || undefined,
         });
 
-        let visibleRows = rows;
         const catalogTotal = count ?? rows.length;
-        if (loaded.ctx.tier === "free" && guardDeps.enforce !== false) {
-          const accessedIds = loaded.ctx.entitlements.usage?.editais_views?.accessed_ids ?? [];
-          visibleRows = applyFreeCatalogListLimit(rows, accessedIds);
-        }
+        const previewEditalIds =
+          loaded.ctx.tier === "free" && guardDeps.enforce !== false
+            ? rows.slice(0, FREE_EDITAIS_PER_MONTH).map((r: { id: string }) => String(r.id))
+            : [];
 
         return {
           status: 200,
@@ -73,10 +69,11 @@ export function buildAppDataUseCases(deps: {
             count: catalogTotal,
             limit,
             offset,
-            rows: visibleRows,
+            rows,
+            preview_edital_ids: previewEditalIds,
             catalog_locked_count:
               loaded.ctx.tier === "free" && guardDeps.enforce !== false
-                ? Math.max(0, catalogTotal - visibleRows.length)
+                ? Math.max(0, catalogTotal - FREE_EDITAIS_PER_MONTH)
                 : 0,
             entitlements: loaded.ctx.entitlements,
           },
@@ -95,38 +92,7 @@ export function buildAppDataUseCases(deps: {
       const id = String(req.params.id || "").trim();
       if (!id) return { status: 400, body: { error: "id inválido" } };
 
-      if (loaded.ctx.tier === "free" && guardDeps.enforce !== false) {
-        const usage = loaded.ctx.entitlements.usage?.editais_views;
-        if (!canAccessEditalCatalog(loaded.ctx.tier, id, usage)) {
-          return {
-            status: 403,
-            body: subscriptionLimitBody(usage?.used ?? FREE_EDITAIS_PER_MONTH, usage?.limit ?? FREE_EDITAIS_PER_MONTH),
-          };
-        }
-
-        const access = await deps.supabase.recordEditalCatalogAccess(
-          loaded.ctx.userId,
-          id,
-          FREE_EDITAIS_PER_MONTH,
-        );
-        if (!access.allowed) {
-          return {
-            status: 403,
-            body: subscriptionLimitBody(access.used, access.limit),
-          };
-        }
-        loaded.ctx.entitlements = {
-          ...loaded.ctx.entitlements,
-          usage: {
-            editais_views: {
-              used: access.used,
-              limit: access.limit,
-              accessed_ids: access.accessedIds,
-            },
-          },
-        };
-      }
-
+      // Plano gratuito: detalhes liberados (upsell fica no dashboard); Pro segue normal.
       const row = await deps.supabase.adminGetEditalById(id);
       return row
         ? { status: 200, body: { row, entitlements: loaded.ctx.entitlements } }
