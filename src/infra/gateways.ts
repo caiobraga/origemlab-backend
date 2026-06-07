@@ -151,6 +151,25 @@ function memEditalUsageBucket(userId: string) {
   return cur;
 }
 
+let warnedMissingSubscriptionUsageTable = false;
+
+/** PostgREST usa PGRST205 (schema cache); Postgres usa 42P01 — ambos quando a tabela não existe. */
+function isMissingSubscriptionUsageTable(error: { code?: string; message?: string } | null | undefined): boolean {
+  const code = String(error?.code || "");
+  const msg = String(error?.message || "");
+  if (code === "42P01" || code === "PGRST205" || code === "PGRST200") return true;
+  return /subscription_usage|schema cache|could not find the table/i.test(msg);
+}
+
+function warnMissingSubscriptionUsageTableOnce(context: string, error: { code?: string; message?: string }) {
+  if (warnedMissingSubscriptionUsageTable) return;
+  warnedMissingSubscriptionUsageTable = true;
+  console.warn(
+    `[subscription_usage] Tabela ausente (${context}); usando contador em memória. ` +
+      `Execute origemlab-services/sql/20260607_subscription_usage.sql no Supabase. (${error.message || error.code})`,
+  );
+}
+
 function parseIndicacaoDate(v: unknown): Date | null {
   const s = String(v ?? "").trim();
   if (!s || /invalid date/i.test(s)) return null;
@@ -1001,7 +1020,8 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         .eq("period_key", periodKey)
         .maybeSingle();
       if (error) {
-        if (error.code === "42P01") {
+        if (isMissingSubscriptionUsageTable(error)) {
+          warnMissingSubscriptionUsageTableOnce("getEditalCatalogUsage", error);
           const bucket = memEditalUsageBucket(userId);
           return { used: bucket.ids.size, accessedIds: [...bucket.ids] };
         }
@@ -1047,7 +1067,10 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         .maybeSingle();
 
       if (error) {
-        if (error.code === "42P01") return recordInMemory();
+        if (isMissingSubscriptionUsageTable(error)) {
+          warnMissingSubscriptionUsageTableOnce("recordEditalCatalogAccess", error);
+          return recordInMemory();
+        }
         throw new Error(error.message);
       }
 
@@ -1074,7 +1097,10 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         .from("subscription_usage")
         .upsert(row, { onConflict: "user_id,metric,period_key" });
       if (upsertErr) {
-        if (upsertErr.code === "42P01") return recordInMemory();
+        if (isMissingSubscriptionUsageTable(upsertErr)) {
+          warnMissingSubscriptionUsageTableOnce("recordEditalCatalogAccess upsert", upsertErr);
+          return recordInMemory();
+        }
         throw new Error(upsertErr.message);
       }
       return { allowed: true, used: nextIds.length, limit: safeLimit, accessedIds: nextIds };

@@ -46,9 +46,16 @@ export async function loadSubscriptionContext(
   let editaisViewsUsed = 0;
   let accessedEditalIds: string[] = [];
   if (tier === "free") {
-    const usage = await deps.supabase.getEditalCatalogUsage(userId);
-    editaisViewsUsed = usage.used;
-    accessedEditalIds = usage.accessedIds;
+    try {
+      const usage = await deps.supabase.getEditalCatalogUsage(userId);
+      editaisViewsUsed = usage.used;
+      accessedEditalIds = usage.accessedIds;
+    } catch (e) {
+      console.warn(
+        "[subscription_usage] Não foi possível carregar uso do catálogo; tratando como 0 views.",
+        e instanceof Error ? e.message : e,
+      );
+    }
   }
 
   return {
