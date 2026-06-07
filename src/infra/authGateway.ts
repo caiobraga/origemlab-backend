@@ -18,6 +18,25 @@ export type AuthGateway = {
   getUserIdFromAccessToken(accessToken: string): Promise<string | null>;
 };
 
+/** Valida exp do JWT Supabase sem chamar a API (fallback se getUser falhar). */
+function userIdFromJwtPayload(accessToken: string): string | null {
+  try {
+    const part = accessToken.split(".")[1];
+    if (!part) return null;
+    const payload = JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as {
+      sub?: string;
+      exp?: number;
+    };
+    if (typeof payload.sub !== "string" || !payload.sub) return null;
+    if (typeof payload.exp === "number" && payload.exp * 1000 <= Date.now() + 5_000) {
+      return null;
+    }
+    return payload.sub;
+  } catch {
+    return null;
+  }
+}
+
 export function buildSupabaseAuthGateway(config: AppConfig): AuthGateway {
   const url = config.supabase.url;
   const anonKey = config.supabase.anonKey;
@@ -56,9 +75,14 @@ export function buildSupabaseAuthGateway(config: AppConfig): AuthGateway {
       };
     },
     async getUserIdFromAccessToken(accessToken) {
-      const { data, error } = await supabase.auth.getUser(accessToken);
-      if (error) return null;
-      return data.user?.id ?? null;
+      try {
+        const { data, error } = await supabase.auth.getUser(accessToken);
+        if (data.user?.id) return data.user.id;
+        if (!error) return userIdFromJwtPayload(accessToken);
+      } catch {
+        // rede / timeout — usa payload local
+      }
+      return userIdFromJwtPayload(accessToken);
     },
   };
 }

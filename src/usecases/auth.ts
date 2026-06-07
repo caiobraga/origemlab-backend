@@ -13,6 +13,16 @@ function sessionMaxAgeSeconds() {
   return 60 * 60 * 24 * 14; // 14d
 }
 
+/** SameSite=None exige Secure em HTTPS; em localhost HTTP usamos Secure=false. */
+function cookieSecureForRequest(req: Request, configured: boolean): boolean {
+  if (configured) return true;
+  const proto = String(req.headers["x-forwarded-proto"] || "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  return proto === "https";
+}
+
 export type AuthUseCases = {
   signIn(req: Request, res: Response): Promise<{ status: number; body: any }>;
   signUp(req: Request, res: Response): Promise<{ status: number; body: any }>;
@@ -106,7 +116,7 @@ export function buildAuthUseCases(deps: {
         setHttpOnlyCookie(res, {
           name: deps.config.auth.cookieName,
           value: sid,
-          secure: deps.config.auth.cookieSecure,
+          secure: cookieSecureForRequest(req, deps.config.auth.cookieSecure),
           maxAgeSeconds: sessionMaxAgeSeconds(),
         });
         return {
@@ -114,6 +124,7 @@ export function buildAuthUseCases(deps: {
           body: {
             ok: true,
             accessToken: session.accessToken,
+            refreshToken: session.refreshToken,
             expiresAtMs: session.expiresAtMs,
             user: { id: session.userId, email: session.email ?? null },
           },
@@ -141,7 +152,10 @@ export function buildAuthUseCases(deps: {
     async signOut(req, res) {
       const sid = getCookie(req, deps.config.auth.cookieName);
       if (sid) deps.sessions.delete(sid);
-      clearCookie(res, { name: deps.config.auth.cookieName, secure: deps.config.auth.cookieSecure });
+      clearCookie(res, {
+        name: deps.config.auth.cookieName,
+        secure: cookieSecureForRequest(req, deps.config.auth.cookieSecure),
+      });
       return { status: 200, body: { ok: true } };
     },
 
@@ -168,7 +182,7 @@ export function buildAuthUseCases(deps: {
       setHttpOnlyCookie(res, {
         name: deps.config.auth.cookieName,
         value: sid,
-        secure: deps.config.auth.cookieSecure,
+        secure: cookieSecureForRequest(req, deps.config.auth.cookieSecure),
         maxAgeSeconds: sessionMaxAgeSeconds(),
       });
       return { status: 200, body: { ok: true, user: { id: userId } } };
