@@ -157,6 +157,9 @@ jobs:
                       merged.append(origin)
               data["CORS_ALLOW_ORIGIN"] = ",".join(merged)
 
+          if not data.get("OLLAMA_FAST_MODEL"):
+              data["OLLAMA_FAST_MODEL"] = "qwen2.5:0.5b"
+
           with open("elasticbeanstalk-env.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False)
           print(f"Built elasticbeanstalk-env.json with {len(data)} keys (values not logged).")
@@ -171,7 +174,8 @@ jobs:
             package-lock.json \
             dist \
             Procfile \
-            .ebextensions
+            .ebextensions \
+            .platform
 
           KEY="beanstalk/${VERSION_LABEL}.zip"
           aws s3 cp bundle.zip "s3://${EB_DEPLOY_BUCKET}/${KEY}"

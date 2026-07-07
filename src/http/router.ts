@@ -1,7 +1,7 @@
 import express from "express";
 import type { AppConfig } from "../config.js";
 import { probeOllama } from "../infra/ollamaHealth.js";
-import { getResolvedOllamaFastModel } from "../infra/ollamaResolve.js";
+import { getResolvedOllamaFastModel, getResolvedOllamaModel } from "../infra/ollamaResolve.js";
 import { asyncRoute } from "./errors.js";
 import { curriculumPdfUpload } from "./pdfUpload.js";
 
@@ -27,15 +27,19 @@ export function buildRouter(deps: {
 
   router.get("/health", async (_req, res) => {
     const ollama = await probeOllama(deps.config);
+    const fastModel = getResolvedOllamaFastModel(deps.config);
+    const qualityModel = getResolvedOllamaModel(deps.config);
     res.status(ollama.ok ? 200 : 503).json({
       ok: ollama.ok,
       ollama: {
         ok: ollama.ok,
         baseUrl: ollama.baseUrl,
-        model: ollama.model,
-        fastModel: getResolvedOllamaFastModel(deps.config),
+        model: qualityModel,
+        fastModel,
+        fastModelAvailable: fastModel !== qualityModel,
         latencyMs: ollama.latencyMs,
         modelsInstalled: ollama.modelsInstalled,
+        installedModels: ollama.installedModels,
         error: ollama.error,
       },
     });

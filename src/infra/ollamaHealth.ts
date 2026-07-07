@@ -6,6 +6,7 @@ export type OllamaHealth = {
   model: string;
   latencyMs?: number;
   modelsInstalled?: number;
+  installedModels?: string[];
   error?: string;
 };
 
@@ -30,9 +31,18 @@ export async function probeOllama(config: AppConfig): Promise<OllamaHealth> {
         error: `Ollama respondeu HTTP ${res.status}: ${body}`,
       };
     }
-    const json = (await res.json()) as { models?: unknown[] };
-    const modelsInstalled = Array.isArray(json.models) ? json.models.length : 0;
-    return { ok: true, baseUrl, model, latencyMs, modelsInstalled };
+    const json = (await res.json()) as { models?: Array<{ name?: string; model?: string }> };
+    const installedModels = (json.models || [])
+      .map((m) => String(m.name || m.model || "").trim())
+      .filter(Boolean);
+    return {
+      ok: true,
+      baseUrl,
+      model,
+      latencyMs,
+      modelsInstalled: installedModels.length,
+      installedModels,
+    };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return {
