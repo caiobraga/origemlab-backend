@@ -1,5 +1,6 @@
 import express from "express";
 import type { AppConfig } from "../config.js";
+import { probeOllama } from "../infra/ollamaHealth.js";
 import { asyncRoute } from "./errors.js";
 import { curriculumPdfUpload } from "./pdfUpload.js";
 
@@ -23,7 +24,20 @@ export function buildRouter(deps: {
 }) {
   const router = express.Router();
 
-  router.get("/health", (_req, res) => res.json({ ok: true }));
+  router.get("/health", async (_req, res) => {
+    const ollama = await probeOllama(deps.config);
+    res.status(ollama.ok ? 200 : 503).json({
+      ok: ollama.ok,
+      ollama: {
+        ok: ollama.ok,
+        baseUrl: ollama.baseUrl,
+        model: ollama.model,
+        latencyMs: ollama.latencyMs,
+        modelsInstalled: ollama.modelsInstalled,
+        error: ollama.error,
+      },
+    });
+  });
 
   // Stripe webhook MUST receive raw body
   router.post(

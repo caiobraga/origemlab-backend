@@ -1,9 +1,15 @@
 import type { AppConfig } from "../config.js";
+import { formatOllamaConnectionError } from "./ollamaHealth.js";
+import { getResolvedOllamaBaseUrl, getResolvedOllamaModel } from "./ollamaResolve.js";
 
 type GenerateResponse = { response?: string };
 type TagsResponse = { models?: Array<{ name?: string; model?: string }> };
 
-let resolvedModel: string | null = null;
+let resolvedModelCache: string | null = null;
+
+function ollamaUrl(config: AppConfig): string {
+  return getResolvedOllamaBaseUrl(config);
+}
 
 function isEmbedModelName(name: string): boolean {
   const n = String(name || "").toLowerCase();
@@ -22,15 +28,16 @@ function matchInstalledModel(requested: string, installed: string[]): string | n
   if (exact) return exact.raw;
   const reqBase = req.split(":")[0];
   return (
-    list.find((m) => m.norm === reqBase || m.norm.startsWith(`${reqBase}:`) || m.norm.startsWith(reqBase))?.raw ?? null
+    list.find((m) => m.norm === reqBase || m.norm.startsWith(`${reqBase}:`) || m.norm.startsWith(reqBase))?.raw ??
+    null
   );
 }
 
-async function fetchInstalledModels(baseUrl: string, timeoutMs: number): Promise<string[]> {
+async function fetchInstalledModels(url: string, timeoutMs: number): Promise<string[]> {
   const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), Math.min(timeoutMs, 10_000));
+  const t = setTimeout(() => controller.abort(), Math.min(timeoutMs, 12_000));
   try {
-    const res = await fetch(`${baseUrl}/api/tags`, { method: "GET", signal: controller.signal });
+    const res = await fetch(`${url}/api/tags`, { method: "GET", signal: controller.signal });
     if (!res.ok) return [];
     const json = (await res.json()) as TagsResponse;
     return (json.models ?? []).map((m) => String(m.name || m.model || "").trim()).filter(Boolean);
@@ -41,39 +48,43 @@ async function fetchInstalledModels(baseUrl: string, timeoutMs: number): Promise
   }
 }
 
-async function resolveModel(baseUrl: string, configuredModel: string, timeoutMs: number): Promise<string> {
-  if (resolvedModel) return resolvedModel;
-  const installed = await fetchInstalledModels(baseUrl, timeoutMs);
-  const configured = matchInstalledModel(configuredModel, installed);
-  if (configured && !isEmbedModelName(configured)) {
-    resolvedModel = configured;
-    return configured;
+async function resolveModel(config: AppConfig, timeoutMs: number): Promise<string> {
+  if (resolvedModelCache) return resolvedModelCache;
+  const url = ollamaUrl(config);
+  const configured = getResolvedOllamaModel(config);
+  const installed = await fetchInstalledModels(url, timeoutMs);
+  const hit = matchInstalledModel(configured, installed);
+  if (hit && !isEmbedModelName(hit)) {
+    resolvedModelCache = hit;
+    return hit;
   }
 
   const fallback =
+    matchInstalledModel("qwen2.5:3b-instruct-q4_K_M", installed) ||
+    matchInstalledModel("gemma3:4b-it-qat", installed) ||
     matchInstalledModel("gemma2:2b", installed) ||
     matchInstalledModel("llama3.2:3b", installed) ||
     matchInstalledModel("qwen2.5:3b-instruct", installed) ||
     installed.find((m) => !isEmbedModelName(m));
 
-  if (!fallback) return configuredModel;
-  console.warn(`[backend/ollama] modelo ${configuredModel} não encontrado — usando ${fallback}`);
-  resolvedModel = fallback;
+  if (!fallback) return configured;
+  console.warn(`[backend/ollama] modelo ${configured} não encontrado — usando ${fallback}`);
+  resolvedModelCache = fallback;
   return fallback;
 }
 
 export async function ollamaChatGenerate(config: AppConfig, prompt: string): Promise<string> {
-  const { baseUrl, model } = config.ollama;
+  const url = ollamaUrl(config);
   const timeoutMs = Math.max(
     15_000,
     parseInt(process.env.OLLAMA_CHAT_TIMEOUT_MS || String(Math.min(config.ollama.timeoutMs, 120_000)), 10) ||
       120_000,
   );
-  const resolved = await resolveModel(baseUrl, model, timeoutMs);
+  const resolved = await resolveModel(config, timeoutMs);
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${baseUrl}/api/generate`, {
+    const res = await fetch(`${url}/api/generate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -95,19 +106,21 @@ export async function ollamaChatGenerate(config: AppConfig, prompt: string): Pro
     if (name === "AbortError") {
       throw new Error(`Ollama timeout após ${timeoutMs}ms`);
     }
-    throw e instanceof Error ? e : new Error(String(e));
+    if (e instanceof Error && e.message.startsWith("Ollama ")) throw e;
+    throw new Error(formatOllamaConnectionError(url, e instanceof Error ? e : new Error(String(e))));
   } finally {
     clearTimeout(t);
   }
 }
 
 export async function ollamaGenerate(config: AppConfig, prompt: string): Promise<string> {
-  const { baseUrl, model, timeoutMs } = config.ollama;
-  const resolved = await resolveModel(baseUrl, model, timeoutMs);
+  const url = ollamaUrl(config);
+  const { timeoutMs } = config.ollama;
+  const resolved = await resolveModel(config, timeoutMs);
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(`${baseUrl}/api/generate`, {
+    const res = await fetch(`${url}/api/generate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -129,7 +142,8 @@ export async function ollamaGenerate(config: AppConfig, prompt: string): Promise
     if (name === "AbortError") {
       throw new Error(`Ollama timeout após ${timeoutMs}ms`);
     }
-    throw e instanceof Error ? e : new Error(String(e));
+    if (e instanceof Error && e.message.startsWith("Ollama ")) throw e;
+    throw new Error(formatOllamaConnectionError(url, e instanceof Error ? e : new Error(String(e))));
   } finally {
     clearTimeout(t);
   }

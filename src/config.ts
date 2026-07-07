@@ -68,7 +68,10 @@ export function loadConfig(): AppConfig {
       ? cookieSecureRaw.toLowerCase() === "true"
       : (process.env.NODE_ENV ?? "").toLowerCase() === "production";
 
-  const ollamaBaseUrl = normalizeBaseUrl(readString("OLLAMA_BASE_URL") ?? "http://3.81.132.92:11434");
+  const ollamaBaseUrl = normalizeBaseUrl(
+    readString("OLLAMA_BASE_URL") ??
+      "http://origemlab-ollama-nlb-312422980eebe2d0.elb.us-east-1.amazonaws.com:11434",
+  );
   const ollamaModel = readString("OLLAMA_MODEL") ?? "gemma2:2b";
   const ollamaTimeoutMs = readNumber("OLLAMA_TIMEOUT_MS", 180000);
 

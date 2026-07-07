@@ -2,6 +2,7 @@ import type { Request } from "express";
 import type { AppConfig } from "../config.js";
 import type { SupabaseGateway } from "../infra/gateways.js";
 import { ollamaGenerate } from "../infra/ollama.js";
+import { isOllamaConnectionError } from "../infra/ollamaHealth.js";
 import { formatReferencesForPrompt, searchWeb, type WebSearchHit } from "../infra/webSearch.js";
 import type { AuthUseCases } from "./auth.js";
 import { requireProSubscription } from "./subscriptionGuard.js";
@@ -251,7 +252,8 @@ export function buildProposalFieldAiUseCases(deps: {
         return { status: 200, body: { generated_text: trimmed } };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao gerar texto";
-        return { status: 500, body: { error: msg } };
+        const status = isOllamaConnectionError(e) ? 503 : 500;
+        return { status, body: { error: msg } };
       }
     },
 

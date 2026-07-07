@@ -131,6 +131,10 @@ jobs:
               print("::error::Secrets SUPABASE_URL and SUPABASE_ANON_KEY are required to build the S3 env JSON.", file=sys.stderr)
               sys.exit(1)
 
+          if not data.get("OLLAMA_BASE_URL"):
+              print("::error::GitHub variable OLLAMA_BASE_URL is required (ex.: http://origemlab-ollama-nlb-....elb.us-east-1.amazonaws.com:11434).", file=sys.stderr)
+              sys.exit(1)
+
           # CORS must list the FRONT origin(s), not only the API host. Merge APP_BASE_URL + FRONT_ORIGINS.
           cors_parts = []
           for k in ("CORS_ALLOW_ORIGIN", "APP_BASE_URL", "FRONT_ORIGINS"):
