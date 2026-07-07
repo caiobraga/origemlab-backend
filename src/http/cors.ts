@@ -54,6 +54,14 @@ function mergeAllowOrigins(...lists: string[]): string[] {
   return [...out];
 }
 
+/** Fronts de produção/dev — sempre permitidos mesmo se CORS_ALLOW_ORIGIN no S3 estiver desatualizado. */
+const KNOWN_FRONT_ORIGINS = [
+  "https://origemlabsolutions.com",
+  "https://www.origemlabsolutions.com",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+];
+
 export function buildCorsAllowList(opts: {
   allowOrigin: string;
   appBaseUrl?: string;
@@ -63,6 +71,7 @@ export function buildCorsAllowList(opts: {
     opts.allowOrigin || "*",
     opts.appBaseUrl || "",
     opts.frontOrigins || "",
+    KNOWN_FRONT_ORIGINS.join(","),
   );
 }
 

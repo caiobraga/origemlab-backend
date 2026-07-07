@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { buildCorsAllowList } from "./cors.js";
 
 export class HttpError extends Error {
   readonly status: number;
@@ -37,7 +38,26 @@ export function asyncRoute(
   };
 }
 
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
+  // Garante CORS em erros da app (ex.: 503 Ollama) se o middleware principal não tiver setado.
+  if (!res.getHeader("Access-Control-Allow-Origin")) {
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : "";
+    const allow = buildCorsAllowList({
+      allowOrigin: process.env.CORS_ALLOW_ORIGIN || "*",
+      appBaseUrl: process.env.APP_BASE_URL || "",
+      frontOrigins: process.env.FRONT_ORIGINS || "",
+    });
+    const wildcard = allow.includes("*");
+    const normalized = origin.replace(/\/$/, "");
+    const ok =
+      wildcard ||
+      (normalized && allow.some((a) => a === normalized || a === origin));
+    if (ok && normalized) {
+      res.setHeader("Access-Control-Allow-Origin", normalized);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+    }
+  }
   const { status, body } = errorToHttp(err);
   res.status(status).json(body);
 }

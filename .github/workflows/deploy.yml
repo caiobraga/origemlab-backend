@@ -85,7 +85,9 @@ jobs:
           AUTH_COOKIE_SECURE: ${{ vars.AUTH_COOKIE_SECURE }}
           OLLAMA_BASE_URL: ${{ vars.OLLAMA_BASE_URL }}
           OLLAMA_MODEL: ${{ vars.OLLAMA_MODEL }}
+          OLLAMA_FAST_MODEL: ${{ vars.OLLAMA_FAST_MODEL }}
           OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
+          OLLAMA_CHAT_TIMEOUT_MS: ${{ vars.OLLAMA_CHAT_TIMEOUT_MS }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           WEB_SEARCH_MAX_QUERIES: ${{ vars.WEB_SEARCH_MAX_QUERIES }}
@@ -115,7 +117,9 @@ jobs:
               "AUTH_COOKIE_SECURE",
               "OLLAMA_BASE_URL",
               "OLLAMA_MODEL",
+              "OLLAMA_FAST_MODEL",
               "OLLAMA_TIMEOUT_MS",
+              "OLLAMA_CHAT_TIMEOUT_MS",
               "TAVILY_API_KEY",
               "SERPER_API_KEY",
               "WEB_SEARCH_MAX_QUERIES",
