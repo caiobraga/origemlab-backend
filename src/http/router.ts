@@ -1,7 +1,7 @@
 import express from "express";
 import type { AppConfig } from "../config.js";
 import { probeOllama } from "../infra/ollamaHealth.js";
-import { getResolvedOllamaFastModel, getResolvedOllamaModel } from "../infra/ollamaResolve.js";
+import { ensureOllamaFromConfig, getResolvedOllamaFastModel, getResolvedOllamaModel } from "../infra/ollamaResolve.js";
 import { asyncRoute } from "./errors.js";
 import { curriculumPdfUpload } from "./pdfUpload.js";
 
@@ -26,6 +26,7 @@ export function buildRouter(deps: {
   const router = express.Router();
 
   router.get("/health", async (_req, res) => {
+    await ensureOllamaFromConfig(deps.config);
     const ollama = await probeOllama(deps.config);
     const fastModel = getResolvedOllamaFastModel(deps.config);
     const qualityModel = getResolvedOllamaModel(deps.config);

@@ -226,7 +226,7 @@ async function stepRewriteWithReferences(
   currentText: string,
   refs: WebSearchHit[],
   mode: "generate" | "improve",
-  llmOpts: ReturnType<typeof resolveFieldLlmOptions>,
+  llmOpts: Awaited<ReturnType<typeof resolveFieldLlmOptions>>,
 ): Promise<string> {
   const refsBlock = formatReferencesForPrompt(refs);
   const prompt = [
@@ -276,7 +276,7 @@ export function buildProposalFieldAiUseCases(deps: {
       const prompt = buildOriginalTaskPrompt(parsed.body, ctx, "generate");
 
       try {
-        const llmOpts = resolveFieldLlmOptions(deps.config, parsed.body);
+        const llmOpts = await resolveFieldLlmOptions(deps.config, parsed.body);
         const generated = await ollamaChatGenerate(deps.config, prompt, llmOpts);
         const trimmed = finalizeFieldText(generated, parsed.body);
         return { status: 200, body: { generated_text: trimmed } };
@@ -308,7 +308,7 @@ export function buildProposalFieldAiUseCases(deps: {
       ].join("\n");
 
       try {
-        const llmOpts = resolveFieldLlmOptions(deps.config, parsed.body);
+        const llmOpts = await resolveFieldLlmOptions(deps.config, parsed.body);
         const improved = await ollamaChatGenerate(deps.config, prompt, llmOpts);
         const trimmed = finalizeFieldText(improved, parsed.body);
         return { status: 200, body: { improved_text: trimmed } };
@@ -378,7 +378,7 @@ export function buildProposalFieldAiUseCases(deps: {
       const originalPrompt = buildOriginalTaskPrompt(parsed.body, ctx, mode);
 
       const steps: Array<{ step: string; detail: string }> = [];
-      const llmOpts = resolveFieldLlmOptions(deps.config, parsed.body);
+      const llmOpts = await resolveFieldLlmOptions(deps.config, parsed.body);
 
       try {
         steps.push({ step: "identificar_afirmacoes", detail: "Analisando trechos que precisam de referência…" });

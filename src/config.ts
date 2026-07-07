@@ -72,7 +72,7 @@ export function loadConfig(): AppConfig {
     readString("OLLAMA_BASE_URL") ??
       "http://origemlab-ollama-nlb-312422980eebe2d0.elb.us-east-1.amazonaws.com:11434",
   );
-  const ollamaModel = readString("OLLAMA_MODEL") ?? "gemma2:2b";
+  const ollamaModel = readString("OLLAMA_MODEL") ?? "qwen2.5:3b-instruct-q4_K_M";
   const ollamaTimeoutMs = readNumber("OLLAMA_TIMEOUT_MS", 180000);
 
   const supabaseUrl = readString("SUPABASE_URL") ?? readString("VITE_SUPABASE_URL");

@@ -117,6 +117,24 @@ async function fetchInstalledModels(baseUrl: string, timeoutMs = 12_000): Promis
  * Escolhe URL Ollama acessível e modelo de chat instalado.
  * Atualiza config.ollama e process.env para o restante do processo.
  */
+let initInflight: Promise<AppConfig> | null = null;
+
+/** Garante modelos resolvidos contra /api/tags (retry se o boot falhou com Ollama ainda subindo). */
+export async function ensureOllamaFromConfig(config: AppConfig): Promise<AppConfig> {
+  if (resolvedModel) return config;
+  if (!initInflight) {
+    initInflight = initOllamaFromConfig(config).finally(() => {
+      initInflight = null;
+    });
+  }
+  try {
+    return await initInflight;
+  } catch (e) {
+    console.error(`[backend/ollama] ensure: ${e instanceof Error ? e.message : e}`);
+    return config;
+  }
+}
+
 export async function initOllamaFromConfig(config: AppConfig): Promise<AppConfig> {
   if (resolvedBase) return config;
 
@@ -180,4 +198,5 @@ export function resetOllamaResolveCacheForTests(): void {
   resolvedBase = null;
   resolvedModel = null;
   resolvedFastModel = null;
+  initInflight = null;
 }

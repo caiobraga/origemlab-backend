@@ -160,6 +160,10 @@ jobs:
           if not data.get("OLLAMA_FAST_MODEL"):
               data["OLLAMA_FAST_MODEL"] = "qwen2.5:0.5b"
 
+          ollama_model = (data.get("OLLAMA_MODEL") or "").strip()
+          if not ollama_model or ollama_model in ("gemma2:2b", "gemma2:2b-instruct"):
+              data["OLLAMA_MODEL"] = "qwen2.5:3b-instruct-q4_K_M"
+
           with open("elasticbeanstalk-env.json", "w", encoding="utf-8") as f:
               json.dump(data, f, ensure_ascii=False)
           print(f"Built elasticbeanstalk-env.json with {len(data)} keys (values not logged).")

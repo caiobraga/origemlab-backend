@@ -1,6 +1,7 @@
 import type { AppConfig } from "../config.js";
 import { formatOllamaConnectionError } from "./ollamaHealth.js";
 import {
+  ensureOllamaFromConfig,
   getResolvedOllamaBaseUrl,
   getResolvedOllamaFastModel,
   getResolvedOllamaModel,
@@ -31,14 +32,17 @@ function preferFastForAllFields(): boolean {
   return String(process.env.OLLAMA_PREFER_FAST ?? "").trim() === "1";
 }
 
+export type FieldLlmOptions = Required<Pick<OllamaGenerateOptions, "numPredict" | "timeoutMs" | "model">>;
+
 /** Escala tokens, timeout e modelo conforme limite do campo. */
-export function resolveFieldLlmOptions(
+export async function resolveFieldLlmOptions(
   config: AppConfig,
   input: {
     word_limit?: number | null;
     char_limit?: number | null;
   },
-): Required<Pick<OllamaGenerateOptions, "numPredict" | "timeoutMs" | "model">> {
+): Promise<FieldLlmOptions> {
+  await ensureOllamaFromConfig(config);
   const wordLimit =
     input.word_limit != null && Number.isFinite(input.word_limit) && input.word_limit > 0
       ? Math.round(input.word_limit)
@@ -119,6 +123,7 @@ export async function ollamaChatGenerate(
   prompt: string,
   options: OllamaGenerateOptions = {},
 ): Promise<string> {
+  await ensureOllamaFromConfig(config);
   return ollamaGenerateInternal(config, prompt, {
     timeoutMs: options.timeoutMs ?? chatTimeoutMs(config),
     numPredict: options.numPredict ?? 700,
