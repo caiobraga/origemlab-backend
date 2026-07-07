@@ -15,7 +15,6 @@ const ACTIVE_STATUSES = new Set(["active", "trialing", "past_due"]);
 
 export function resolvePlanTier(profile: SubscriptionProfile | null | undefined): PlanTier {
   if (!profile) return "free";
-  if (profile.is_admin) return "institucional";
 
   const status = String(profile.subscription_status || "").trim();
   const key = String(profile.subscription_plan_key || "").trim();
