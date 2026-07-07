@@ -24,6 +24,7 @@ async function getUserFromBearer(supabase: SupabaseGateway, req: Request) {
 export type StripeBillingUseCases = {
   createCheckoutSession(req: Request): Promise<{ status: number; body: any }>;
   createPortalSession(req: Request): Promise<{ status: number; body: any }>;
+  syncSubscription(req: Request): Promise<{ status: number; body: any }>;
 };
 
 export function buildStripeBillingUseCases(deps: {
@@ -118,6 +119,43 @@ export function buildStripeBillingUseCases(deps: {
         return { status: 200, body: { url: session.url } };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "portal failed";
+        return { status: 500, body: { error: msg } };
+      }
+    },
+
+    async syncSubscription(req) {
+      if (!deps.stripe.hasStripe) {
+        return { status: 503, body: { error: "Stripe não configurado" } };
+      }
+      const { user, error: authErr } = await getUserFromBearer(deps.supabase, req);
+      if (!user) {
+        return {
+          status: 401,
+          body: {
+            error: authErr === "no_bearer" ? "Faça login." : "Sessão inválida.",
+          },
+        };
+      }
+      try {
+        const result = await deps.stripe.syncSubscriptionForUser(user.id, user.email);
+        if (!result.synced) {
+          return {
+            status: 404,
+            body: {
+              error: "Nenhuma assinatura ativa encontrada no Stripe para este e-mail.",
+            },
+          };
+        }
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            plan_key: result.planKey,
+            subscription_id: result.subscriptionId,
+          },
+        };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "sync failed";
         return { status: 500, body: { error: msg } };
       }
     },

@@ -8,6 +8,7 @@ import {
   subscriptionRequiredBody,
   type PlanTier,
 } from "../lib/subscriptionEntitlements.js";
+import { mergeProfileWithAuthSubscription } from "../lib/stripeSubscriptionSync.js";
 
 export type SubscriptionContext = {
   userId: string;
@@ -37,7 +38,14 @@ export async function loadSubscriptionContext(
     return { ok: false, status: 401, body: { error: "unauthenticated" } };
   }
 
-  const profile = (await deps.supabase.getProfile(userId)) || {};
+  const profileRaw = (await deps.supabase.getProfile(userId)) || {};
+  let authUser: { user_metadata?: Record<string, unknown> } | null = null;
+  try {
+    authUser = await deps.supabase.getAuthUserById(userId);
+  } catch {
+    // metadata opcional
+  }
+  const profile = mergeProfileWithAuthSubscription(profileRaw, authUser);
   if (profile.is_blocked) {
     return { ok: false, status: 403, body: { error: "account_blocked", message: "Conta bloqueada." } };
   }

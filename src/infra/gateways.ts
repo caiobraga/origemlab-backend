@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import { createServerSupabaseClient } from "./supabaseClient.js";
 import { isEditalAtivoByDatePatterns } from "../lib/editalActiveByDatePatterns.js";
 import { currentMonthKey, FREE_EDITAIS_PER_MONTH } from "../lib/subscriptionEntitlements.js";
+import { syncActiveSubscriptionForUser } from "../lib/stripeSubscriptionSync.js";
 
 export type StripeGateway = {
   hasStripe: boolean;
@@ -26,11 +27,16 @@ export type StripeGateway = {
     planKey: string;
   }): Promise<string>;
   deactivatePrice(priceId: string): Promise<void>;
+  syncSubscriptionForUser(
+    userId: string,
+    email?: string | null,
+  ): Promise<{ synced: boolean; planKey?: string | null; subscriptionId?: string }>;
 };
 
 export type SupabaseGateway = {
   isConfigured: boolean;
   getUserFromAccessToken(token: string): Promise<User | null>;
+  getAuthUserById(userId: string): Promise<User | null>;
   adminListUsers(input: { page: number; perPage: number }): Promise<{ users: any[] }>;
   profilesByUserIds(userIds: string[]): Promise<any[]>;
   profileIsAdmin(userId: string): Promise<boolean>;
@@ -398,6 +404,10 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         // ignore
       }
     },
+    async syncSubscriptionForUser(userId, email) {
+      if (!stripe) throw new Error("Stripe not configured");
+      return syncActiveSubscriptionForUser(stripe, userId, email);
+    },
   };
 
   const supabaseGateway: SupabaseGateway = {
@@ -405,6 +415,12 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
     async getUserFromAccessToken(token) {
       if (!supabase) return null;
       const { data, error } = await supabase.auth.getUser(token);
+      if (error) return null;
+      return data.user ?? null;
+    },
+    async getAuthUserById(userId) {
+      if (!supabase) return null;
+      const { data, error } = await supabase.auth.admin.getUserById(userId);
       if (error) return null;
       return data.user ?? null;
     },

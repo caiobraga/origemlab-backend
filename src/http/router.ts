@@ -208,6 +208,14 @@ export function buildRouter(deps: {
   );
 
   router.post(
+    "/api/stripe/sync-subscription",
+    asyncRoute(async (req, res) => {
+      const out = await deps.stripeBilling.syncSubscription(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
     "/api/edital-chat",
     asyncRoute(async (req, res) => {
       const out = await deps.app.editalChat(req);
