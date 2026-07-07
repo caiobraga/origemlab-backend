@@ -95,6 +95,7 @@ export type SupabaseGateway = {
     campos_formulario: any;
     gerado_com_ia: boolean;
   }): Promise<any>;
+  getPropostaForUser(userId: string, propostaId: string): Promise<any | null>;
   updatePropostaForUser(userId: string, propostaId: string, patch: Record<string, any>): Promise<any>;
   deletePropostaForUser(userId: string, propostaId: string): Promise<void>;
   refreshMyIndicacoes(userId: string, limit: number): Promise<number>;
@@ -787,6 +788,60 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         .single();
       if (error) throw new Error(error.message);
       return data;
+    },
+
+    async getPropostaForUser(userId, propostaId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("propostas")
+        .select("*")
+        .eq("id", propostaId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!data) return null;
+
+      let edital_titulo: string | null = null;
+      let edital_orgao: string | null = null;
+      let edital_valor: string | null = null;
+      let edital_fonte: string | null = null;
+
+      const editalId = String((data as any).edital_id || "").trim();
+      if (editalId) {
+        const { data: edCorreto } = await supabase
+          .from("editais_corretos")
+          .select("titulo,orgao,valor_projeto,fonte")
+          .eq("id", editalId)
+          .maybeSingle();
+        const ed = edCorreto as any;
+        if (ed) {
+          edital_titulo = ed.titulo ?? null;
+          edital_orgao = ed.orgao ?? null;
+          edital_valor = ed.valor_projeto ?? null;
+          edital_fonte = ed.fonte ?? null;
+        } else {
+          const { data: edRaw } = await supabase
+            .from("editais")
+            .select("titulo,orgao,valor_projeto,fonte")
+            .eq("id", editalId)
+            .maybeSingle();
+          const raw = edRaw as any;
+          if (raw) {
+            edital_titulo = raw.titulo ?? null;
+            edital_orgao = raw.orgao ?? null;
+            edital_valor = raw.valor_projeto ?? null;
+            edital_fonte = raw.fonte ?? null;
+          }
+        }
+      }
+
+      return {
+        ...(data as any),
+        edital_titulo,
+        edital_orgao,
+        edital_valor,
+        edital_fonte,
+      };
     },
 
     async updatePropostaForUser(userId, propostaId, patch) {

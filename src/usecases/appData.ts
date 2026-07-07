@@ -102,10 +102,12 @@ export function buildAppDataUseCases(deps: {
     async listPropostas(req) {
       const loaded = await requireProSubscription(req, guardDeps, "propostas");
       if (!loaded.ok) return { status: loaded.status, body: loaded.body };
+      const editalId = String(req.query.edital_id || "").trim() || undefined;
       const { count, rows } = await deps.supabase.adminListPropostas({
-        limit: 200,
+        limit: editalId ? 1 : 200,
         offset: 0,
         userId: loaded.ctx.userId,
+        editalId,
       });
       return { status: 200, body: { count, rows } };
     },
@@ -115,12 +117,7 @@ export function buildAppDataUseCases(deps: {
       if (!loaded.ok) return { status: loaded.status, body: loaded.body };
       const id = String(req.params.id || "").trim();
       if (!id) return { status: 400, body: { error: "id inválido" } };
-      const { rows } = await deps.supabase.adminListPropostas({
-        limit: 1,
-        offset: 0,
-        userId: loaded.ctx.userId,
-      });
-      const row = (rows as any[]).find((r) => (r as any).id === id) || null;
+      const row = await deps.supabase.getPropostaForUser(loaded.ctx.userId, id);
       return row ? { status: 200, body: { row } } : { status: 404, body: { error: "Não encontrado" } };
     },
 

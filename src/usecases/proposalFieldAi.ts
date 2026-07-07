@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import type { AppConfig } from "../config.js";
 import type { SupabaseGateway } from "../infra/gateways.js";
-import { ollamaGenerate } from "../infra/ollama.js";
+import { ollamaChatGenerate } from "../infra/ollama.js";
 import { isOllamaConnectionError } from "../infra/ollamaHealth.js";
 import { formatReferencesForPrompt, searchWeb, type WebSearchHit } from "../infra/webSearch.js";
 import type { AuthUseCases } from "./auth.js";
@@ -79,6 +79,12 @@ function linesFromLlmBlock(text: string, max = 6): string[] {
     .slice(0, max);
 }
 
+function trimPromptBlock(text: string, max: number): string {
+  const s = String(text || "").trim();
+  if (!s || s.length <= max) return s;
+  return `${s.slice(0, max)}\n…`;
+}
+
 async function resolveContext(
   deps: { supabase: SupabaseGateway },
   body: FieldBody,
@@ -91,12 +97,15 @@ async function resolveContext(
   if (!formSummary && body.form_data) {
     try {
       const raw = JSON.stringify(body.form_data);
-      formSummary = raw.length > 6000 ? `${raw.slice(0, 6000)}\n…` : raw;
+      formSummary = raw.length > 2500 ? `${raw.slice(0, 2500)}\n…` : raw;
     } catch {
       formSummary = "";
     }
   }
-  return { editalSummary: ctx.editalSummary, formSummary };
+  return {
+    editalSummary: trimPromptBlock(ctx.editalSummary, 2500),
+    formSummary: trimPromptBlock(formSummary, 2000),
+  };
 }
 
 /** Prompt “antigo” / base da tarefa de redação do campo (gerar ou melhorar). */
@@ -152,7 +161,7 @@ async function stepIdentifyClaims(config: AppConfig, currentText: string, fieldN
     "TEXTO:",
     currentText,
   ].join("\n");
-  return ollamaGenerate(config, prompt);
+  return ollamaChatGenerate(config, prompt);
 }
 
 async function stepBuildSearchQueries(
@@ -170,7 +179,7 @@ async function stepBuildSearchQueries(
     "AFIRMAÇÕES:",
     claimsBlock,
   ].join("\n");
-  const out = await ollamaGenerate(config, prompt);
+  const out = await ollamaChatGenerate(config, prompt);
   return linesFromLlmBlock(out, config.webSearch.maxQueries);
 }
 
@@ -218,7 +227,7 @@ async function stepRewriteWithReferences(
     "Tarefa final: Reescreva o texto do campo incorporando embasamento científico onde couber.",
     "Mantenha o tom de proposta de fomento. Responda APENAS com o texto final.",
   ].join("\n");
-  return ollamaGenerate(config, prompt);
+  return ollamaChatGenerate(config, prompt);
 }
 
 export function buildProposalFieldAiUseCases(deps: {
@@ -247,7 +256,7 @@ export function buildProposalFieldAiUseCases(deps: {
       const prompt = buildOriginalTaskPrompt(parsed.body, ctx, "generate");
 
       try {
-        const generated = await ollamaGenerate(deps.config, prompt);
+        const generated = await ollamaChatGenerate(deps.config, prompt);
         const trimmed = enforceCharLimit(generated, parsed.body.char_limit);
         return { status: 200, body: { generated_text: trimmed } };
       } catch (e) {
@@ -278,7 +287,7 @@ export function buildProposalFieldAiUseCases(deps: {
       ].join("\n");
 
       try {
-        const improved = await ollamaGenerate(deps.config, prompt);
+        const improved = await ollamaChatGenerate(deps.config, prompt);
         const trimmed = enforceCharLimit(improved, parsed.body.char_limit);
         return { status: 200, body: { improved_text: trimmed } };
       } catch (e) {
@@ -318,7 +327,7 @@ export function buildProposalFieldAiUseCases(deps: {
       ].join("\n");
 
       try {
-        const analysis = await ollamaGenerate(deps.config, prompt);
+        const analysis = await ollamaChatGenerate(deps.config, prompt);
         const needs =
           /\*\*sim\*\*|precisa de embasamento[^\n]*sim|embasamento científico[^\n]*sim/i.test(analysis) &&
           !/\*\*n[aã]o\*\*/i.test(analysis.split("Precisa de embasamento")[1] || "");
@@ -353,7 +362,7 @@ export function buildProposalFieldAiUseCases(deps: {
         const claimsBlock = await stepIdentifyClaims(deps.config, currentText || parsed.body.field_description, parsed.body.field_name);
         if (/^NENHUMA$/im.test(claimsBlock.trim())) {
           steps.push({ step: "pesquisa", detail: "Nenhuma afirmação exige referência; reescrevendo com prompt base." });
-          const out = await ollamaGenerate(deps.config, [
+          const out = await ollamaChatGenerate(deps.config, [
             originalPrompt,
             "",
             currentText ? `Texto atual:\n"""\n${currentText}\n"""` : "",
