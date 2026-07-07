@@ -137,6 +137,8 @@ jobs:
               v = (data.get(k) or "").strip()
               if v:
                   cors_parts.append(v)
+          # Origens de produção conhecidas — evita bloqueio CORS quando só a API (devopai.net) está listada.
+          cors_parts.append("https://origemlabsolutions.com,https://www.origemlabsolutions.com")
           if cors_parts:
               merged = []
               seen = set()
