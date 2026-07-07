@@ -86,11 +86,48 @@ function enforceWordLimit(text: string, wordLimit: number | null | undefined): s
   return words.slice(0, wordLimit).join(" ");
 }
 
+function normalizeForDedup(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[.,;:!?…]+$/g, "")
+    .trim();
+}
+
+/** Remove parágrafos e frases repetidos (comum em modelos pequenos com num_predict alto). */
+function deduplicateRepeatedText(text: string): string {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) return trimmed;
+
+  const paragraphs = trimmed.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const seenParas = new Set<string>();
+  const uniqueParas: string[] = [];
+  for (const p of paragraphs) {
+    const key = normalizeForDedup(p).slice(0, 320);
+    if (key.length >= 40 && seenParas.has(key)) continue;
+    if (key.length >= 40) seenParas.add(key);
+    uniqueParas.push(p);
+  }
+
+  const joined = uniqueParas.join("\n\n");
+  const sentences = joined.split(/(?<=[.!?…])\s+/).map((s) => s.trim()).filter(Boolean);
+  const seenSent = new Set<string>();
+  const uniqueSent: string[] = [];
+  for (const s of sentences) {
+    const key = normalizeForDedup(s).slice(0, 220);
+    if (key.length >= 35 && seenSent.has(key)) continue;
+    if (key.length >= 35) seenSent.add(key);
+    uniqueSent.push(s);
+  }
+  return uniqueSent.join(" ").trim();
+}
+
 function finalizeFieldText(
   text: string,
   body: Pick<FieldBody, "word_limit" | "char_limit">,
 ): string {
-  let out = enforceCharLimit(text, body.char_limit);
+  let out = deduplicateRepeatedText(text);
+  out = enforceCharLimit(out, body.char_limit);
   out = enforceWordLimit(out, body.word_limit);
   return out;
 }
@@ -146,16 +183,23 @@ function buildOriginalTaskPrompt(
     body.field_description ? `Descrição do campo: ${body.field_description}` : "",
     limits,
     "",
-    ctx.editalSummary ? `Contexto do edital:\n${ctx.editalSummary}` : "",
-    ctx.formSummary ? `Contexto do formulário da proposta (JSON resumido):\n${ctx.formSummary}` : "",
+    ctx.formSummary
+      ? `Contexto do formulário da proposta (prioridade — baseie o texto nestes dados):\n${ctx.formSummary}`
+      : "",
+    ctx.editalSummary
+      ? `Contexto do edital (referência apenas — não copie descrição genérica do programa):\n${ctx.editalSummary}`
+      : "",
     "",
   ];
 
   if (mode === "generate") {
     parts.push(
       "Tarefa: Gere um texto completo e bem estruturado para este campo.",
+      "Descreva O PROJETO ESPECÍFICO da proposta (objetivos, método, resultados esperados, inovação), usando o formulário como base.",
+      "Não repita a descrição genérica do edital/programa de fomento nem copie trechos do contexto do edital.",
+      "Não repita parágrafos, frases ou ideias — cada parágrafo deve trazer informação nova.",
       body.word_limit && body.word_limit >= 400
-        ? "Seja completo e objetivo; respeite rigorosamente o limite de palavras (não ultrapasse)."
+        ? "Seja completo e objetivo; respeite rigorosamente o limite de palavras (não ultrapasse). Não preencha com texto genérico ou repetido para atingir o limite."
         : "",
       "Responda APENAS com o texto final, sem explicações.",
     );

@@ -13,12 +13,15 @@ export type OllamaGenerateOptions = {
   timeoutMs?: number;
   numPredict?: number;
   temperature?: number;
+  repeatPenalty?: number;
   /** Override do modelo (ex.: modelo rápido em campos longos). */
   model?: string;
 };
 
-/** Campos com ≥ este limite usam modelo rápido (se instalado). */
+/** Campos com ≥ este limite podem usar modelo rápido (se instalado). */
 const FAST_MODEL_WORD_THRESHOLD = 200;
+/** Acima deste limite o modelo rápido (0.5b) repete demais — usar modelo de qualidade. */
+const FAST_MODEL_MAX_WORDS = 500;
 
 function chatTimeoutMs(config: AppConfig): number {
   return Math.max(
@@ -61,12 +64,18 @@ export async function resolveFieldLlmOptions(
 
   const useFast =
     preferFastForAllFields() ||
-    (wordLimit != null && wordLimit >= FAST_MODEL_WORD_THRESHOLD) ||
-    (charLimit != null && charLimit >= 1200);
+    (wordLimit != null &&
+      wordLimit >= FAST_MODEL_WORD_THRESHOLD &&
+      wordLimit <= FAST_MODEL_MAX_WORDS) ||
+    (charLimit != null && charLimit >= 1200 && charLimit <= 3200);
 
   const qualityModel = getResolvedOllamaModel(config);
   const fastModel = getResolvedOllamaFastModel(config);
   const model = useFast && fastModel !== qualityModel ? fastModel : qualityModel;
+
+  if (model === fastModel && fastModel !== qualityModel && wordLimit) {
+    numPredict = Math.min(numPredict, Math.ceil(wordLimit * 1.2) + 80);
+  }
 
   // Modelo menor costuma gerar mais tokens/s — timeout proporcional menor
   const msPerToken = model === fastModel && fastModel !== qualityModel ? 70 : 150;
@@ -84,6 +93,7 @@ async function ollamaGenerateInternal(
   const timeoutMs = options.timeoutMs ?? chatTimeoutMs(config);
   const numPredict = options.numPredict ?? 700;
   const temperature = options.temperature ?? 0.2;
+  const repeatPenalty = options.repeatPenalty ?? 1.18;
   const model = options.model ?? getResolvedOllamaModel(config);
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
@@ -95,7 +105,12 @@ async function ollamaGenerateInternal(
         model,
         prompt,
         stream: false,
-        options: { temperature, num_predict: numPredict },
+        options: {
+          temperature,
+          num_predict: numPredict,
+          repeat_penalty: repeatPenalty,
+          repeat_last_n: 128,
+        },
       }),
       signal: controller.signal,
     });
