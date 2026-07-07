@@ -1,6 +1,7 @@
 import express from "express";
 import type { AppConfig } from "../config.js";
 import { probeOllama } from "../infra/ollamaHealth.js";
+import { getResolvedOllamaFastModel } from "../infra/ollamaResolve.js";
 import { asyncRoute } from "./errors.js";
 import { curriculumPdfUpload } from "./pdfUpload.js";
 
@@ -32,6 +33,7 @@ export function buildRouter(deps: {
         ok: ollama.ok,
         baseUrl: ollama.baseUrl,
         model: ollama.model,
+        fastModel: getResolvedOllamaFastModel(deps.config),
         latencyMs: ollama.latencyMs,
         modelsInstalled: ollama.modelsInstalled,
         error: ollama.error,

@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import type { AppConfig } from "../config.js";
 import type { SupabaseGateway } from "../infra/gateways.js";
-import { ollamaChatGenerate } from "../infra/ollama.js";
+import { ollamaChatGenerate, resolveFieldLlmOptions } from "../infra/ollama.js";
 import { isOllamaConnectionError } from "../infra/ollamaHealth.js";
 import { formatReferencesForPrompt, searchWeb, type WebSearchHit } from "../infra/webSearch.js";
 import type { AuthUseCases } from "./auth.js";
@@ -79,6 +79,22 @@ function linesFromLlmBlock(text: string, max = 6): string[] {
     .slice(0, max);
 }
 
+function enforceWordLimit(text: string, wordLimit: number | null | undefined): string {
+  if (!wordLimit || !Number.isFinite(wordLimit) || wordLimit <= 0) return text;
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length <= wordLimit) return text;
+  return words.slice(0, wordLimit).join(" ");
+}
+
+function finalizeFieldText(
+  text: string,
+  body: Pick<FieldBody, "word_limit" | "char_limit">,
+): string {
+  let out = enforceCharLimit(text, body.char_limit);
+  out = enforceWordLimit(out, body.word_limit);
+  return out;
+}
+
 function trimPromptBlock(text: string, max: number): string {
   const s = String(text || "").trim();
   if (!s || s.length <= max) return s;
@@ -138,6 +154,9 @@ function buildOriginalTaskPrompt(
   if (mode === "generate") {
     parts.push(
       "Tarefa: Gere um texto completo e bem estruturado para este campo.",
+      body.word_limit && body.word_limit >= 400
+        ? "Seja completo e objetivo; respeite rigorosamente o limite de palavras (não ultrapasse)."
+        : "",
       "Responda APENAS com o texto final, sem explicações.",
     );
   } else {
@@ -207,6 +226,7 @@ async function stepRewriteWithReferences(
   currentText: string,
   refs: WebSearchHit[],
   mode: "generate" | "improve",
+  llmOpts: ReturnType<typeof resolveFieldLlmOptions>,
 ): Promise<string> {
   const refsBlock = formatReferencesForPrompt(refs);
   const prompt = [
@@ -227,7 +247,7 @@ async function stepRewriteWithReferences(
     "Tarefa final: Reescreva o texto do campo incorporando embasamento científico onde couber.",
     "Mantenha o tom de proposta de fomento. Responda APENAS com o texto final.",
   ].join("\n");
-  return ollamaChatGenerate(config, prompt);
+  return ollamaChatGenerate(config, prompt, llmOpts);
 }
 
 export function buildProposalFieldAiUseCases(deps: {
@@ -256,8 +276,9 @@ export function buildProposalFieldAiUseCases(deps: {
       const prompt = buildOriginalTaskPrompt(parsed.body, ctx, "generate");
 
       try {
-        const generated = await ollamaChatGenerate(deps.config, prompt);
-        const trimmed = enforceCharLimit(generated, parsed.body.char_limit);
+        const llmOpts = resolveFieldLlmOptions(deps.config, parsed.body);
+        const generated = await ollamaChatGenerate(deps.config, prompt, llmOpts);
+        const trimmed = finalizeFieldText(generated, parsed.body);
         return { status: 200, body: { generated_text: trimmed } };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao gerar texto";
@@ -287,8 +308,9 @@ export function buildProposalFieldAiUseCases(deps: {
       ].join("\n");
 
       try {
-        const improved = await ollamaChatGenerate(deps.config, prompt);
-        const trimmed = enforceCharLimit(improved, parsed.body.char_limit);
+        const llmOpts = resolveFieldLlmOptions(deps.config, parsed.body);
+        const improved = await ollamaChatGenerate(deps.config, prompt, llmOpts);
+        const trimmed = finalizeFieldText(improved, parsed.body);
         return { status: 200, body: { improved_text: trimmed } };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao melhorar texto";
@@ -356,6 +378,7 @@ export function buildProposalFieldAiUseCases(deps: {
       const originalPrompt = buildOriginalTaskPrompt(parsed.body, ctx, mode);
 
       const steps: Array<{ step: string; detail: string }> = [];
+      const llmOpts = resolveFieldLlmOptions(deps.config, parsed.body);
 
       try {
         steps.push({ step: "identificar_afirmacoes", detail: "Analisando trechos que precisam de referência…" });
@@ -366,11 +389,11 @@ export function buildProposalFieldAiUseCases(deps: {
             originalPrompt,
             "",
             currentText ? `Texto atual:\n"""\n${currentText}\n"""` : "",
-          ].join("\n"));
+          ].join("\n"), llmOpts);
           return {
             status: 200,
             body: {
-              grounded_text: enforceCharLimit(out, parsed.body.char_limit),
+              grounded_text: finalizeFieldText(out, parsed.body),
               references: [],
               steps,
             },
@@ -396,12 +419,13 @@ export function buildProposalFieldAiUseCases(deps: {
           currentText,
           references,
           mode,
+          llmOpts,
         );
 
         return {
           status: 200,
           body: {
-            grounded_text: enforceCharLimit(grounded, parsed.body.char_limit),
+            grounded_text: finalizeFieldText(grounded, parsed.body),
             references,
             steps,
             search_queries: queries,

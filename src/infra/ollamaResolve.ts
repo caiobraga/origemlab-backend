@@ -2,6 +2,7 @@ import type { AppConfig } from "../config.js";
 
 let resolvedBase: string | null = null;
 let resolvedModel: string | null = null;
+let resolvedFastModel: string | null = null;
 
 const CHAT_MODEL_PRIORITY = [
   "qwen2.5:3b-instruct-q4_K_M",
@@ -10,6 +11,15 @@ const CHAT_MODEL_PRIORITY = [
   "llama3.2:3b",
   "gemma2:2b",
   "phi3.5",
+];
+
+/** Modelos menores — mais rápidos para campos longos (ex.: 1000 palavras). */
+const FAST_MODEL_PRIORITY = [
+  "qwen2.5:0.5b",
+  "llama3.2:1b-instruct-q4_K_M",
+  "llama3.2:1b",
+  "tinyllama:latest",
+  "phi3.5:latest",
 ];
 
 function normalizeBase(url: string): string {
@@ -46,6 +56,16 @@ function pickChatModel(installed: string[], configured: string): string | null {
     if (m && !isEmbedModelName(m)) return m;
   }
   return installed.find((m) => !isEmbedModelName(m)) ?? null;
+}
+
+function pickFastModel(installed: string[], configured: string): string | null {
+  const hit = matchInstalledModel(configured, installed);
+  if (hit && !isEmbedModelName(hit)) return hit;
+  for (const pref of FAST_MODEL_PRIORITY) {
+    const m = matchInstalledModel(pref, installed);
+    if (m && !isEmbedModelName(m)) return m;
+  }
+  return null;
 }
 
 function candidateUrls(configured: string): string[] {
@@ -110,20 +130,29 @@ export async function initOllamaFromConfig(config: AppConfig): Promise<AppConfig
     const chat = pickChatModel(models, config.ollama.model);
     if (!chat) continue;
 
+    const fastConfigured = String(process.env.OLLAMA_FAST_MODEL || "").trim();
+    const fast = pickFastModel(models, fastConfigured) ?? chat;
+
     const requestedModel = config.ollama.model;
     resolvedBase = url;
     resolvedModel = chat;
+    resolvedFastModel = fast;
     config.ollama.baseUrl = url;
     config.ollama.model = chat;
     process.env.OLLAMA_BASE_URL = url;
     process.env.OLLAMA_MODEL = chat;
+    if (fast !== chat) {
+      process.env.OLLAMA_FAST_MODEL_RESOLVED = fast;
+    }
 
     if (url !== normalizeBase(configured)) {
       console.warn(`[backend/ollama] ${configured} inacessível — usando ${url} (modelo ${chat})`);
     } else if (normalizeModelName(chat) !== normalizeModelName(requestedModel)) {
       console.warn(`[backend/ollama] modelo ${requestedModel} não encontrado — usando ${chat}`);
     } else {
-      console.log(`[backend/ollama] OK ${url} (modelo ${chat})`);
+      console.log(
+        `[backend/ollama] OK ${url} (qualidade: ${chat}${fast !== chat ? `, rápido: ${fast}` : ""})`,
+      );
     }
     return config;
   }
@@ -142,7 +171,13 @@ export function getResolvedOllamaModel(config: AppConfig): string {
   return resolvedModel || config.ollama.model;
 }
 
+/** Modelo leve para geração de campos longos (fallback: modelo de qualidade). */
+export function getResolvedOllamaFastModel(config: AppConfig): string {
+  return resolvedFastModel || getResolvedOllamaModel(config);
+}
+
 export function resetOllamaResolveCacheForTests(): void {
   resolvedBase = null;
   resolvedModel = null;
+  resolvedFastModel = null;
 }

@@ -10,6 +10,8 @@ services:
       NODE_OPTIONS: "--dns-result-order=ipv4first"
       OLLAMA_PREFER_LOCAL: "1"
       OLLAMA_BASE_URL_LOCAL: "http://host.docker.internal:11434"
+      # Modelo leve para campos longos (≥200 palavras); qualidade continua no 3B
+      OLLAMA_FAST_MODEL: "qwen2.5:0.5b"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     dns:
