@@ -22,6 +22,8 @@ export type OllamaGenerateOptions = {
 const FAST_MODEL_WORD_THRESHOLD = 200;
 /** Acima deste limite o modelo rápido (0.5b) repete demais — usar modelo de qualidade. */
 const FAST_MODEL_MAX_WORDS = 500;
+/** Campos sem word_limit/char_limit — estimativa para tokens e timeout. */
+const DEFAULT_UNBOUNDED_WORD_LIMIT = 700;
 
 function chatTimeoutMs(config: AppConfig): number {
   return Math.max(
@@ -55,9 +57,13 @@ export async function resolveFieldLlmOptions(
       ? Math.round(input.char_limit)
       : null;
 
+  // Campos abertos (ex.: qualificação da equipe) usam estimativa para não cortar em ~145s.
+  const sizingWordLimit =
+    wordLimit ?? (charLimit == null ? DEFAULT_UNBOUNDED_WORD_LIMIT : null);
+
   let numPredict = 700;
-  if (wordLimit) {
-    numPredict = Math.min(2800, Math.ceil(wordLimit * 1.65) + 120);
+  if (sizingWordLimit) {
+    numPredict = Math.min(2800, Math.ceil(sizingWordLimit * 1.65) + 120);
   } else if (charLimit) {
     numPredict = Math.min(2800, Math.ceil(charLimit / 3.2) + 120);
   }
@@ -73,13 +79,16 @@ export async function resolveFieldLlmOptions(
   const fastModel = getResolvedOllamaFastModel(config);
   const model = useFast && fastModel !== qualityModel ? fastModel : qualityModel;
 
-  if (model === fastModel && fastModel !== qualityModel && wordLimit) {
-    numPredict = Math.min(numPredict, Math.ceil(wordLimit * 1.2) + 80);
+  if (model === fastModel && fastModel !== qualityModel && sizingWordLimit) {
+    numPredict = Math.min(numPredict, Math.ceil(sizingWordLimit * 1.2) + 80);
   }
 
-  // Modelo menor costuma gerar mais tokens/s — timeout proporcional menor
-  const msPerToken = model === fastModel && fastModel !== qualityModel ? 70 : 150;
-  const timeoutMs = Math.min(300_000, Math.max(60_000, 40_000 + numPredict * msPerToken));
+  const isFast = model === fastModel && fastModel !== qualityModel;
+  const msPerToken = isFast ? 70 : 200;
+  const timeoutMs = Math.min(
+    300_000,
+    Math.max(isFast ? 60_000 : 120_000, 50_000 + numPredict * msPerToken),
+  );
 
   return { numPredict, timeoutMs, model };
 }
