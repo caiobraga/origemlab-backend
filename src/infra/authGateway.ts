@@ -9,7 +9,20 @@ export type AuthGateway = {
     refreshToken: string;
     expiresAtMs: number;
   }>;
-  signUp(email: string, password: string): Promise<void>;
+  signUp(
+    email: string,
+    password: string,
+    options?: { emailRedirectTo?: string },
+  ): Promise<{
+    userId: string | null;
+    email: string | null;
+    session: {
+      accessToken: string;
+      refreshToken: string;
+      expiresAtMs: number;
+    } | null;
+    needsEmailConfirmation: boolean;
+  }>;
   refresh(refreshToken: string): Promise<{
     accessToken: string;
     refreshToken: string;
@@ -60,9 +73,51 @@ export function buildSupabaseAuthGateway(config: AppConfig): AuthGateway {
         expiresAtMs: expiresAtSec || Date.now() + (data.session.expires_in ?? 3600) * 1000,
       };
     },
-    async signUp(email, password) {
-      const { error } = await supabase.auth.signUp({ email, password });
+    async signUp(email, password, options) {
+      const { data, error } = await supabase.auth.signUp({
+        email,
+        password,
+        options: options?.emailRedirectTo
+          ? { emailRedirectTo: options.emailRedirectTo }
+          : undefined,
+      });
       if (error) throw new Error(error.message);
+
+      const identities = data.user?.identities;
+      const likelyDuplicate =
+        Array.isArray(identities) && identities.length === 0;
+
+      if (likelyDuplicate) {
+        // Não inventa sessão; o front deve orientar reenvio / login.
+        return {
+          userId: data.user?.id ?? null,
+          email: data.user?.email ?? email,
+          session: null,
+          needsEmailConfirmation: true,
+        };
+      }
+
+      if (!data.session) {
+        return {
+          userId: data.user?.id ?? null,
+          email: data.user?.email ?? email,
+          session: null,
+          needsEmailConfirmation: true,
+        };
+      }
+
+      const expiresAtSec = (data.session.expires_at ?? 0) * 1000;
+      return {
+        userId: data.user?.id ?? null,
+        email: data.user?.email ?? email,
+        session: {
+          accessToken: data.session.access_token,
+          refreshToken: data.session.refresh_token,
+          expiresAtMs:
+            expiresAtSec || Date.now() + (data.session.expires_in ?? 3600) * 1000,
+        },
+        needsEmailConfirmation: false,
+      };
     },
     async refresh(refreshToken) {
       const { data, error } = await supabase.auth.refreshSession({ refresh_token: refreshToken });

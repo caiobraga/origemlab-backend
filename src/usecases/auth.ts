@@ -139,9 +139,35 @@ export function buildAuthUseCases(deps: {
       const email = String((req as any).body?.email || "").trim();
       const password = String((req as any).body?.password || "");
       if (!email || !password) return { status: 400, body: { error: "email e password obrigatórios" } };
+
+      const emailRedirectTo =
+        String((req as any).body?.emailRedirectTo || "").trim() ||
+        (deps.config.appBaseUrl
+          ? `${deps.config.appBaseUrl.replace(/\/$/, "")}/auth/callback`
+          : "");
+
       try {
-        await deps.auth.signUp(email, password);
-        // optionally auto-login
+        const result = await deps.auth.signUp(email, password, {
+          emailRedirectTo: emailRedirectTo || undefined,
+        });
+
+        if (result.needsEmailConfirmation || !result.session) {
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              needsEmailConfirmation: true,
+              user: result.userId
+                ? { id: result.userId, email: result.email }
+                : null,
+              message:
+                "Conta criada. Confirme o email pelo link que enviamos antes de entrar.",
+            },
+          };
+        }
+
+        // Confirm email desligado: já há sessão — espelha o fluxo de signIn.
+        (req as any).body = { email, password };
         return await this.signIn(req, res);
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao criar conta";
