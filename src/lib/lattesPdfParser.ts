@@ -37,15 +37,18 @@ function normalizeSpaces(s: string): string {
   return s.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Extract text from a PDF buffer.
+ * Uses `unpdf` (edge-safe). Avoids `pdf-parse`/`pdfjs-dist` which need DOMMatrix / native canvas
+ * and break on Cloudflare Workers.
+ */
 export async function extractTextFromPdfBuffer(buffer: Buffer): Promise<string> {
-  const { PDFParse } = await import("pdf-parse");
-  const parser = new (PDFParse as any)({ data: new Uint8Array(buffer) });
-  try {
-    const result = await parser.getText();
-    return cleanText(result?.text || "");
-  } finally {
-    await parser.destroy?.();
-  }
+  const data = buffer instanceof Uint8Array ? buffer : new Uint8Array(buffer);
+  const { extractText, getDocumentProxy } = await import("unpdf");
+  const pdf = await getDocumentProxy(data);
+  const result = await extractText(pdf, { mergePages: true });
+  const text = typeof result.text === "string" ? result.text : (result.text || []).join("\n");
+  return cleanText(text);
 }
 
 function extractLattesId(text: string): string | null {

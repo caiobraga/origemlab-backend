@@ -15,6 +15,15 @@ export type AppConfig = {
     model: string;
     timeoutMs: number;
   };
+  openrouter: {
+    apiKey: string;
+    chatModel: string;
+    embedModel: string;
+    embedDimensions: number;
+    timeoutMs: number;
+  };
+  /** openrouter (default) | ollama (local emergency) */
+  aiProvider: "openrouter" | "ollama";
   webSearch: {
     tavilyApiKey: string | null;
     serperApiKey: string | null;
@@ -68,12 +77,20 @@ export function loadConfig(): AppConfig {
       ? cookieSecureRaw.toLowerCase() === "true"
       : (process.env.NODE_ENV ?? "").toLowerCase() === "production";
 
-  const ollamaBaseUrl = normalizeBaseUrl(
-    readString("OLLAMA_BASE_URL") ??
-      "http://origemlab-ollama-nlb-312422980eebe2d0.elb.us-east-1.amazonaws.com:11434",
-  );
+  const ollamaBaseUrl = normalizeBaseUrl(readString("OLLAMA_BASE_URL") ?? "");
   const ollamaModel = readString("OLLAMA_MODEL") ?? "qwen2.5:3b-instruct-q4_K_M";
   const ollamaTimeoutMs = readNumber("OLLAMA_TIMEOUT_MS", 180000);
+
+  const aiProviderRaw = (readString("AI_PROVIDER") ?? "openrouter").toLowerCase();
+  const aiProvider = aiProviderRaw === "ollama" ? "ollama" : "openrouter";
+  const openrouterApiKey = readString("OPENROUTER_API_KEY") ?? "";
+  const openrouterChatModel =
+    readString("OPENROUTER_CHAT_MODEL") ??
+    readString("OPENROUTER_MODEL") ??
+    "qwen/qwen-2.5-7b-instruct";
+  const openrouterEmbedModel = readString("OPENROUTER_EMBED_MODEL") ?? "baai/bge-m3";
+  const openrouterEmbedDimensions = readNumber("EMBED_DIMENSIONS", 1024);
+  const openrouterTimeoutMs = readNumber("OPENROUTER_TIMEOUT_MS", ollamaTimeoutMs);
 
   const supabaseUrl = readString("SUPABASE_URL") ?? readString("VITE_SUPABASE_URL");
   const supabaseServiceRoleKey =
@@ -97,6 +114,14 @@ export function loadConfig(): AppConfig {
       model: ollamaModel,
       timeoutMs: ollamaTimeoutMs,
     },
+    openrouter: {
+      apiKey: openrouterApiKey,
+      chatModel: openrouterChatModel,
+      embedModel: openrouterEmbedModel,
+      embedDimensions: openrouterEmbedDimensions,
+      timeoutMs: openrouterTimeoutMs,
+    },
+    aiProvider,
     webSearch: {
       tavilyApiKey: readString("TAVILY_API_KEY"),
       serperApiKey: readString("SERPER_API_KEY"),

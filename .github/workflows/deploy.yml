@@ -88,6 +88,12 @@ jobs:
           OLLAMA_FAST_MODEL: ${{ vars.OLLAMA_FAST_MODEL }}
           OLLAMA_TIMEOUT_MS: ${{ vars.OLLAMA_TIMEOUT_MS }}
           OLLAMA_CHAT_TIMEOUT_MS: ${{ vars.OLLAMA_CHAT_TIMEOUT_MS }}
+          AI_PROVIDER: ${{ vars.AI_PROVIDER }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_CHAT_MODEL: ${{ vars.OPENROUTER_CHAT_MODEL }}
+          OPENROUTER_EMBED_MODEL: ${{ vars.OPENROUTER_EMBED_MODEL }}
+          OPENROUTER_TIMEOUT_MS: ${{ vars.OPENROUTER_TIMEOUT_MS }}
+          EMBED_DIMENSIONS: ${{ vars.EMBED_DIMENSIONS }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
           SERPER_API_KEY: ${{ secrets.SERPER_API_KEY }}
           WEB_SEARCH_MAX_QUERIES: ${{ vars.WEB_SEARCH_MAX_QUERIES }}
@@ -120,6 +126,12 @@ jobs:
               "OLLAMA_FAST_MODEL",
               "OLLAMA_TIMEOUT_MS",
               "OLLAMA_CHAT_TIMEOUT_MS",
+              "AI_PROVIDER",
+              "OPENROUTER_API_KEY",
+              "OPENROUTER_CHAT_MODEL",
+              "OPENROUTER_EMBED_MODEL",
+              "OPENROUTER_TIMEOUT_MS",
+              "EMBED_DIMENSIONS",
               "TAVILY_API_KEY",
               "SERPER_API_KEY",
               "WEB_SEARCH_MAX_QUERIES",
@@ -135,9 +147,23 @@ jobs:
               print("::error::Secrets SUPABASE_URL and SUPABASE_ANON_KEY are required to build the S3 env JSON.", file=sys.stderr)
               sys.exit(1)
 
-          if not data.get("OLLAMA_BASE_URL"):
-              print("::error::GitHub variable OLLAMA_BASE_URL is required (ex.: http://origemlab-ollama-nlb-....elb.us-east-1.amazonaws.com:11434).", file=sys.stderr)
-              sys.exit(1)
+          provider = (data.get("AI_PROVIDER") or "openrouter").strip().lower()
+          data["AI_PROVIDER"] = provider if provider in ("openrouter", "ollama") else "openrouter"
+
+          if data["AI_PROVIDER"] == "openrouter":
+              if not data.get("OPENROUTER_API_KEY"):
+                  print("::error::Secret OPENROUTER_API_KEY is required when AI_PROVIDER=openrouter.", file=sys.stderr)
+                  sys.exit(1)
+              if not data.get("OPENROUTER_CHAT_MODEL"):
+                  data["OPENROUTER_CHAT_MODEL"] = "qwen/qwen-2.5-7b-instruct"
+              if not data.get("OPENROUTER_EMBED_MODEL"):
+                  data["OPENROUTER_EMBED_MODEL"] = "baai/bge-m3"
+              if not data.get("EMBED_DIMENSIONS"):
+                  data["EMBED_DIMENSIONS"] = "1024"
+          else:
+              if not data.get("OLLAMA_BASE_URL"):
+                  print("::error::GitHub variable OLLAMA_BASE_URL is required when AI_PROVIDER=ollama.", file=sys.stderr)
+                  sys.exit(1)
 
           # CORS must list the FRONT origin(s), not only the API host. Merge APP_BASE_URL + FRONT_ORIGINS.
           cors_parts = []

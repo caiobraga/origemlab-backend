@@ -1,10 +1,10 @@
 import dotenv from "dotenv";
 import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 
-// Local/dev: `.env` base → optional `.nv` → `.env.local` wins (never override already-exported env).
+// Local/dev: `.env` base → optional `.nv` → `.env.local` (shell/exported vars always win).
 dotenv.config({ path: ".env", override: false });
-dotenv.config({ path: ".nv", override: true });
-dotenv.config({ path: ".env.local", override: true });
+dotenv.config({ path: ".nv", override: false });
+dotenv.config({ path: ".env.local", override: false });
 
 function shouldLoadFromS3(): boolean {
   const explicit = (process.env.APP_ENV_LOAD_FROM_S3 ?? "").toLowerCase() === "true";

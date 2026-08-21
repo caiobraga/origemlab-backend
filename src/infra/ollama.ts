@@ -6,6 +6,7 @@ import {
   getResolvedOllamaFastModel,
   getResolvedOllamaModel,
 } from "./ollamaResolve.js";
+import { getAiProvider, openRouterChat } from "./openrouter.js";
 
 type GenerateResponse = { response?: string };
 
@@ -47,7 +48,9 @@ export async function resolveFieldLlmOptions(
     char_limit?: number | null;
   },
 ): Promise<FieldLlmOptions> {
-  await ensureOllamaFromConfig(config);
+  if (getAiProvider() === "ollama") {
+    await ensureOllamaFromConfig(config);
+  }
   const wordLimit =
     input.word_limit != null && Number.isFinite(input.word_limit) && input.word_limit > 0
       ? Math.round(input.word_limit)
@@ -66,6 +69,17 @@ export async function resolveFieldLlmOptions(
     numPredict = Math.min(2800, Math.ceil(sizingWordLimit * 1.65) + 120);
   } else if (charLimit) {
     numPredict = Math.min(2800, Math.ceil(charLimit / 3.2) + 120);
+  }
+
+  if (getAiProvider() === "openrouter") {
+    const chatModel =
+      String(process.env.OPENROUTER_CHAT_MODEL || process.env.OPENROUTER_MODEL || "").trim() ||
+      config.openrouter.chatModel;
+    const timeoutMs = Math.min(
+      300_000,
+      Math.max(60_000, 30_000 + numPredict * 40),
+    );
+    return { numPredict, timeoutMs, model: chatModel };
   }
 
   const useFast =
@@ -147,6 +161,22 @@ export async function ollamaChatGenerate(
   prompt: string,
   options: OllamaGenerateOptions = {},
 ): Promise<string> {
+  if (getAiProvider() === "openrouter") {
+    return openRouterChat(prompt, {
+      timeoutMs: options.timeoutMs ?? chatTimeoutMs(config),
+      maxTokens: options.numPredict ?? 700,
+      temperature: options.temperature ?? 0.2,
+      model: options.model ?? config.openrouter.chatModel,
+    }, {
+      apiKey: config.openrouter.apiKey,
+      chatModel: config.openrouter.chatModel,
+      embedModel: config.openrouter.embedModel,
+      embedDimensions: config.openrouter.embedDimensions,
+      timeoutMs: config.openrouter.timeoutMs,
+      siteUrl: config.appBaseUrl || undefined,
+    });
+  }
+
   await ensureOllamaFromConfig(config);
   return ollamaGenerateInternal(config, prompt, {
     timeoutMs: options.timeoutMs ?? chatTimeoutMs(config),
@@ -158,7 +188,7 @@ export async function ollamaChatGenerate(
 
 /** @deprecated Prefer ollamaChatGenerate — same limits, avoids unbounded generation. */
 export async function ollamaGenerate(config: AppConfig, prompt: string): Promise<string> {
-  return ollamaGenerateInternal(config, prompt, {
+  return ollamaChatGenerate(config, prompt, {
     timeoutMs: chatTimeoutMs(config),
     numPredict: 900,
     temperature: 0,

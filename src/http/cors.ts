@@ -26,6 +26,14 @@ function isOriginAllowed(origin: string, allow: string[], wildcard: boolean): bo
 
   const oHost = hostFromOrigin(o);
 
+  // Cloudflare Pages preview / project URLs (before custom domain cutover)
+  if (
+    oHost === "origemlab-front.pages.dev" ||
+    oHost.endsWith(".origemlab-front.pages.dev")
+  ) {
+    return true;
+  }
+
   for (const entryRaw of allow) {
     const entry = normalizeOriginLike(entryRaw);
     if (!entry) continue;
@@ -58,6 +66,7 @@ function mergeAllowOrigins(...lists: string[]): string[] {
 const KNOWN_FRONT_ORIGINS = [
   "https://origemlabsolutions.com",
   "https://www.origemlabsolutions.com",
+  "https://origemlab-front.pages.dev",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
 ];

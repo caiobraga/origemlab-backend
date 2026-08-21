@@ -7,10 +7,25 @@ const dispatcher = new Agent({
   bodyTimeout: 120_000,
 });
 
+function isCloudflareWorker(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    typeof navigator.userAgent === "string" &&
+    navigator.userAgent.includes("Cloudflare-Workers")
+  );
+}
+
+/**
+ * Node (local/ECS): Undici with longer timeouts.
+ * Cloudflare Workers: native fetch — Undici Agent throws "fetch failed" on Workers.
+ */
 export function supabaseFetch(
   input: string | URL | Request,
   init?: RequestInit,
 ): Promise<Response> {
+  if (isCloudflareWorker()) {
+    return globalThis.fetch(input as RequestInfo, init);
+  }
   return undiciFetch(input as string, {
     ...init,
     dispatcher,

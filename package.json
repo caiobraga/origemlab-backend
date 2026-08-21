@@ -7,6 +7,7 @@
   },
   "scripts": {
     "dev": "tsx src/index.ts",
+    "dev:local": "PORT=8081 tsx src/index.ts",
     "build": "esbuild src/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "start": "NODE_ENV=production node dist/index.js",
     "check": "tsc --noEmit"
@@ -22,7 +23,8 @@
     "stripe": "^22.0.1",
     "swagger-ui-dist": "5.32.5",
     "swagger-ui-express": "^5.0.1",
-    "undici": "^6.21.0"
+    "undici": "^6.21.0",
+    "unpdf": "^1.8.1"
   },
   "devDependencies": {
     "@types/cookie": "^1.0.0",
