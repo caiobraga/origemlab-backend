@@ -3,6 +3,7 @@ import type { SupabaseGateway } from "../infra/gateways.js";
 import type { AuthUseCases } from "./auth.js";
 import {
   buildEntitlementsPayload,
+  buildOpenAccessEntitlements,
   hasProFeatures,
   resolvePlanTier,
   subscriptionRequiredBody,
@@ -20,6 +21,7 @@ export type SubscriptionContext = {
 type GuardDeps = {
   supabase: SupabaseGateway;
   auth: AuthUseCases;
+  /** When false, unlock all Pro features (open beta / free testing). */
   enforce?: boolean;
 };
 
@@ -51,6 +53,20 @@ export async function loadSubscriptionContext(
   }
 
   const tier = resolvePlanTier(profile);
+
+  // Open beta: ignore Stripe plan and grant full product access.
+  if (deps.enforce === false) {
+    return {
+      ok: true,
+      ctx: {
+        userId,
+        profile,
+        tier,
+        entitlements: buildOpenAccessEntitlements(tier),
+      },
+    };
+  }
+
   let editaisViewsUsed = 0;
   let accessedEditalIds: string[] = [];
   if (tier === "free") {

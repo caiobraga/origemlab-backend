@@ -17,6 +17,7 @@ export type ProposalFieldAiUseCases = {
 type FieldBody = {
   edital_id: string;
   proposta_id: string;
+  projeto_id: string;
   field_name: string;
   field_description: string;
   field_id: string;
@@ -29,12 +30,13 @@ type FieldBody = {
 
 function parseFieldBody(req: Request): { ok: true; body: FieldBody } | { ok: false; error: string } {
   const raw = (req as any).body || {};
-  const editalId = raw.edital_id ? String(raw.edital_id).trim() : "";
-  const propostaId = raw.proposta_id ? String(raw.proposta_id).trim() : "";
-  if (!editalId && !propostaId) {
-    return { ok: false, error: "É necessário edital_id ou proposta_id." };
+  const editalId = String(raw.edital_id || raw.editalId || "").trim();
+  const propostaId = String(raw.proposta_id || raw.propostaId || "").trim();
+  const projetoId = String(raw.projeto_id || raw.projetoId || "").trim();
+  if (!editalId && !propostaId && !projetoId) {
+    return { ok: false, error: "É necessário edital_id, proposta_id ou projeto_id." };
   }
-  const fieldName = String(raw.field_name || "").trim();
+  const fieldName = String(raw.field_name || raw.fieldName || "").trim();
   if (!fieldName) return { ok: false, error: "field_name obrigatório" };
 
   return {
@@ -42,14 +44,15 @@ function parseFieldBody(req: Request): { ok: true; body: FieldBody } | { ok: fal
     body: {
       edital_id: editalId,
       proposta_id: propostaId,
+      projeto_id: projetoId,
       field_name: fieldName,
-      field_description: String(raw.field_description || "").trim(),
-      field_id: String(raw.field_id || "").trim(),
-      word_limit: raw.word_limit != null ? Number(raw.word_limit) : null,
-      char_limit: raw.char_limit != null ? Number(raw.char_limit) : null,
-      current_text: String(raw.current_text || "").trim(),
-      form_data: raw.form_data ?? null,
-      target_language: String(raw.target_language || "pt").trim() || "pt",
+      field_description: String(raw.field_description || raw.fieldDescription || "").trim(),
+      field_id: String(raw.field_id || raw.fieldId || "").trim(),
+      word_limit: raw.word_limit != null ? Number(raw.word_limit) : raw.wordLimit != null ? Number(raw.wordLimit) : null,
+      char_limit: raw.char_limit != null ? Number(raw.char_limit) : raw.charLimit != null ? Number(raw.charLimit) : null,
+      current_text: String(raw.current_text || raw.currentText || "").trim(),
+      form_data: raw.form_data ?? raw.formData ?? null,
+      target_language: String(raw.target_language || raw.targetLanguage || "pt").trim() || "pt",
     },
   };
 }
@@ -145,6 +148,7 @@ async function resolveContext(
   const ctx = await deps.supabase.fetchAiFieldContext({
     editalId: body.edital_id || undefined,
     propostaId: body.proposta_id || undefined,
+    projetoId: body.projeto_id || undefined,
   });
   let formSummary = ctx.formSummary;
   if (!formSummary && body.form_data) {
@@ -175,8 +179,11 @@ function buildOriginalTaskPrompt(
     .filter(Boolean)
     .join("\n");
 
+  const isProjeto = Boolean(body.projeto_id) && !body.edital_id && !body.proposta_id;
   const parts = [
-    "Você é um assistente especializado em redigir textos de propostas para editais de fomento.",
+    isProjeto
+      ? "Você é um assistente especializado em redigir textos de projetos de pesquisa/inovação para fomento."
+      : "Você é um assistente especializado em redigir textos de propostas para editais de fomento.",
     `Idioma de saída: ${lang}.`,
     "",
     `Campo: ${body.field_name}`,
@@ -184,7 +191,9 @@ function buildOriginalTaskPrompt(
     limits,
     "",
     ctx.formSummary
-      ? `Contexto do formulário da proposta (prioridade — baseie o texto nestes dados):\n${ctx.formSummary}`
+      ? isProjeto
+        ? `Contexto do projeto (prioridade — baseie o texto nestes dados):\n${ctx.formSummary}`
+        : `Contexto do formulário da proposta (prioridade — baseie o texto nestes dados):\n${ctx.formSummary}`
       : "",
     ctx.editalSummary
       ? `Contexto do edital (referência apenas — não copie descrição genérica do programa):\n${ctx.editalSummary}`
@@ -195,7 +204,9 @@ function buildOriginalTaskPrompt(
   if (mode === "generate") {
     parts.push(
       "Tarefa: Gere um texto completo e bem estruturado para este campo.",
-      "Descreva O PROJETO ESPECÍFICO da proposta (objetivos, método, resultados esperados, inovação), usando o formulário como base.",
+      isProjeto
+        ? "Descreva O PROJETO ESPECÍFICO (objetivos, método, resultados esperados, inovação), usando o contexto do projeto como base."
+        : "Descreva O PROJETO ESPECÍFICO da proposta (objetivos, método, resultados esperados, inovação), usando o formulário como base.",
       "Não repita a descrição genérica do edital/programa de fomento nem copie trechos do contexto do edital.",
       "Não repita parágrafos, frases ou ideias — cada parágrafo deve trazer informação nova.",
       body.word_limit && body.word_limit >= 400

@@ -129,6 +129,29 @@ export function buildEntitlementsPayload(
   };
 }
 
+/**
+ * Acesso aberto para testes (SUBSCRIPTION_ENFORCE=false):
+ * todos os recursos liberados sem assinatura Stripe.
+ */
+export function buildOpenAccessEntitlements(
+  tier: PlanTier = "free",
+): EntitlementsPayload {
+  return {
+    tier,
+    plan_name: "Acesso aberto (testes)",
+    pro_features: true,
+    limits: { editais_per_month: null },
+    features: {
+      editais_catalog: true,
+      edital_chat: true,
+      ai_proposal: true,
+      propostas: true,
+      indicacoes: true,
+      dashboard_metrics: true,
+    },
+  };
+}
+
 export function subscriptionRequiredBody(feature: string, tier: PlanTier) {
   return {
     error: "subscription_required",

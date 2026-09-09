@@ -213,6 +213,31 @@ export function buildOpenApiDocument(sessionCookieName: string): Record<string, 
           responses: { "200": { description: "user ou null", content: { "application/json": { schema: { type: "object" } } } } },
         },
       },
+      "/api/public/catalog-stats": {
+        get: {
+          tags: ["Public"],
+          summary: "Estatísticas públicas do catálogo (landing)",
+          responses: {
+            "200": {
+              description: "Contagens e potencial em BRL",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      editaisCorretosCount: { type: "integer" },
+                      editaisAnalisadosCount: { type: "integer" },
+                      fontesCount: { type: "integer" },
+                      potencialBRL: { type: "number" },
+                      editaisComValor: { type: "integer" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       "/api/editais": {
         get: {
           tags: ["Editais"],

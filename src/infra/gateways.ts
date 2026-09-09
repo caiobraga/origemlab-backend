@@ -3,6 +3,7 @@ import Stripe from "stripe";
 import type { AppConfig } from "../config.js";
 import { createServerSupabaseClient } from "./supabaseClient.js";
 import { isEditalAtivoByDatePatterns } from "../lib/editalActiveByDatePatterns.js";
+import { computeArrecadacaoCatalogo } from "../lib/editalValorStats.js";
 import { currentMonthKey, FREE_EDITAIS_PER_MONTH } from "../lib/subscriptionEntitlements.js";
 import { syncActiveSubscriptionForUser } from "../lib/stripeSubscriptionSync.js";
 
@@ -55,6 +56,7 @@ export type SupabaseGateway = {
     status?: string;
     userId?: string;
     editalId?: string;
+    empresaId?: string;
   }): Promise<{ count: number | null; rows: any[] }>;
   adminUpdateProposta(id: string, patch: { status?: string; progresso?: number }): Promise<any>;
   adminListEditais(input: {
@@ -94,18 +96,51 @@ export type SupabaseGateway = {
     editalId: string;
     campos_formulario: any;
     gerado_com_ia: boolean;
+    projetoId?: string | null;
+    empresaId?: string | null;
   }): Promise<any>;
   getPropostaForUser(userId: string, propostaId: string): Promise<any | null>;
   updatePropostaForUser(userId: string, propostaId: string, patch: Record<string, any>): Promise<any>;
   deletePropostaForUser(userId: string, propostaId: string): Promise<void>;
-  refreshMyIndicacoes(userId: string, limit: number): Promise<number>;
-  fetchMyIndicacoes(userId: string, limit: number): Promise<any[]>;
+  refreshMyIndicacoes(userId: string, limit: number, empresaId?: string | null): Promise<number>;
+  fetchMyIndicacoes(userId: string, limit: number, empresaId?: string | null): Promise<any[]>;
   getProfile(userId: string): Promise<any | null>;
   updateProfile(userId: string, patch: Record<string, any>): Promise<any>;
+  // Empresas (consultor)
+  listEmpresasForUser(userId: string): Promise<any[]>;
+  getEmpresaForUser(userId: string, empresaId: string): Promise<any | null>;
+  createEmpresa(input: {
+    userId: string;
+    razao_social: string;
+    nome_fantasia?: string | null;
+    cnpj?: string | null;
+    area?: string | null;
+    dados?: Record<string, unknown>;
+  }): Promise<any>;
+  updateEmpresaForUser(userId: string, empresaId: string, patch: Record<string, any>): Promise<any>;
+  deleteEmpresaForUser(userId: string, empresaId: string): Promise<void>;
+  // Projetos
+  listProjetosForUser(userId: string, empresaId?: string): Promise<any[]>;
+  getProjetoForUser(userId: string, projetoId: string): Promise<any | null>;
+  createProjeto(input: {
+    userId: string;
+    titulo: string;
+    resumo?: string | null;
+    objetivos?: string | null;
+    area?: string | null;
+    publico_alvo?: string;
+    status?: string;
+    empresa_id?: string | null;
+    conteudo?: Record<string, unknown>;
+  }): Promise<any>;
+  updateProjetoForUser(userId: string, projetoId: string, patch: Record<string, any>): Promise<any>;
+  deleteProjetoForUser(userId: string, projetoId: string): Promise<void>;
+  matchEditaisForProjeto(userId: string, projetoId: string, limit: number): Promise<any[]>;
   getReferralStats(userId: string): Promise<{ convites: number; conversoes: number; ganhos: number; potencial: number }>;
   fetchAiFieldContext(input: {
     editalId?: string;
     propostaId?: string;
+    projetoId?: string;
   }): Promise<{ editalSummary: string; formSummary: string }>;
   fetchEditalChatContext(input: {
     editalId: string;
@@ -114,6 +149,13 @@ export type SupabaseGateway = {
   }): Promise<{ editalSummary: string; excerpts: string[] }>;
   getEditalCatalogUsage(userId: string): Promise<{ used: number; accessedIds: string[] }>;
   getEditalCatalogUsageCount(userId: string): Promise<number>;
+  getPublicCatalogStats(): Promise<{
+    editaisCorretosCount: number;
+    editaisAnalisadosCount: number;
+    fontesCount: number;
+    potencialBRL: number;
+    editaisComValor: number;
+  }>;
   recordEditalCatalogAccess(
     userId: string,
     editalId: string,
@@ -190,6 +232,21 @@ function parseIndicacaoDate(v: unknown): Date | null {
     const d = new Date(Number(br[3]), Number(br[2]) - 1, Number(br[1]));
     return isNaN(d.getTime()) ? null : d;
   }
+  const brShort = s.match(/\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2})\b/);
+  if (brShort) {
+    const yy = Number(brShort[3]);
+    const year = yy <= 69 ? 2000 + yy : 1900 + yy;
+    const d = new Date(year, Number(brShort[2]) - 1, Number(brShort[1]));
+    return isNaN(d.getTime()) ? null : d;
+  }
+  // Textos longos / JSON: pegar a data mais tardia mencionada
+  const tokens = s.match(/\d{4}-\d{2}-\d{2}|\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}/g) || [];
+  const dates: Date[] = [];
+  for (const token of tokens) {
+    const d = parseIndicacaoDate(token);
+    if (d) dates.push(d);
+  }
+  if (dates.length) return new Date(Math.max(...dates.map((d) => d.getTime())));
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
 }
@@ -203,8 +260,25 @@ function editalIndicacaoDeadline(row: any): Date | null {
     }
   })() : row.timeline_estimada;
   const fases = Array.isArray(timeline?.fases) ? timeline.fases : [];
-  const timelineDates = fases
-    .map((f: any) => parseIndicacaoDate(f?.data_fim) || parseIndicacaoDate(f?.prazo))
+
+  const isSubmissaoOuInscricao = (fase: any): boolean => {
+    const nome = String(fase?.nome || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+    return (
+      nome.includes("submiss") ||
+      nome.includes("envio") ||
+      nome.includes("inscri") ||
+      nome.includes("propost")
+    );
+  };
+
+  const fasesPreferidas = fases.filter(isSubmissaoOuInscricao);
+  const fasesAlvo = fasesPreferidas.length > 0 ? fasesPreferidas : fases;
+
+  const timelineDates = fasesAlvo
+    .map((f: any) => parseIndicacaoDate(f?.data_fim) || parseIndicacaoDate(f?.prazo) || parseIndicacaoDate(f?.fim))
     .filter(Boolean) as Date[];
   if (timelineDates.length) return new Date(Math.max(...timelineDates.map((d) => d.getTime())));
 
@@ -217,7 +291,10 @@ function scoreIndicacao(profile: any, edital: any): { score: number; motivos: st
   const motivos: string[] = [];
   let score = 10;
 
-  const userType = String(profile?.user_type || "pesquisador");
+  const rawType = String(profile?.user_type || "pesquisador");
+  const userType =
+    rawType === "pessoa-empresa" || rawType === "ambos" ? "consultor" : rawType;
+
   if (userType === "pesquisador") {
     if (edital.is_researcher === true) {
       score += 45;
@@ -226,7 +303,7 @@ function scoreIndicacao(profile: any, edital: any): { score: number; motivos: st
       score -= 50;
       motivos.push("Não parece voltado a pesquisadores");
     }
-  } else if (userType === "pessoa-empresa") {
+  } else if (userType === "consultor") {
     if (edital.is_company === true) {
       score += 45;
       motivos.push("Elegível para empresas/startups");
@@ -282,13 +359,151 @@ function scoreIndicacao(profile: any, edital: any): { score: number; motivos: st
   return { score: finalScore, motivos: [...new Set(motivos)].slice(0, 5) };
 }
 
-async function refreshMyIndicacoesFallback(supabase: SupabaseClient, userId: string, limit: number): Promise<number> {
+function scoreProjetoContraEdital(projeto: any, edital: any): { score: number; motivos: string[] } {
+  const motivos: string[] = [];
+  let score = 10;
+
+  const publico = String(projeto?.publico_alvo || "ambos");
+  if (publico === "pesquisador") {
+    if (edital.is_researcher === true) {
+      score += 40;
+      motivos.push("Edital alinhado a pesquisadores");
+    } else if (edital.is_researcher === false) {
+      score -= 40;
+      motivos.push("Edital não voltado a pesquisadores");
+    }
+  } else if (publico === "empresa") {
+    if (edital.is_company === true) {
+      score += 40;
+      motivos.push("Edital alinhado a empresas");
+    } else if (edital.is_company === false) {
+      score -= 40;
+      motivos.push("Edital não voltado a empresas");
+    }
+  } else {
+    if (edital.is_researcher === true || edital.is_company === true) {
+      score += 30;
+      motivos.push("Público do projeto compatível com o edital");
+    }
+  }
+
+  const projetoArea = String(projeto?.area || "").trim();
+  const conteudo = projeto?.conteudo && typeof projeto.conteudo === "object" ? projeto.conteudo : {};
+  const palavras = Array.isArray(conteudo.palavras_chave)
+    ? conteudo.palavras_chave.map(String)
+    : [];
+  const projetoHay = normalizeIndicacaoText(
+    [
+      projeto?.titulo,
+      projeto?.resumo,
+      projeto?.objetivos,
+      projeto?.area,
+      conteudo.origem?.tipo,
+      conteudo.origem?.descricao,
+      ...palavras,
+      conteudo.resumo_executivo,
+      conteudo.caracterizacao_problema,
+      conteudo.objetivo_geral,
+      conteudo.objetivos_especificos,
+      conteudo.metodologia,
+      conteudo.cronograma,
+      conteudo.resultados_esperados,
+      conteudo.impactos,
+      conteudo.equipe,
+      conteudo.instituicoes,
+      conteudo.orcamento_estimado,
+      conteudo.referencias,
+      conteudo.texto_completo,
+      // fallback: qualquer JSON legado
+      JSON.stringify(conteudo),
+    ]
+      .filter(Boolean)
+      .join(" "),
+  );
+  const editalHay = normalizeIndicacaoText(
+    [edital.area, edital.titulo, edital.descricao, edital.sobre_programa, edital.criterios_elegibilidade].join(" "),
+  );
+
+  if (projetoArea) {
+    const terms = INDICACAO_AREA_TERMS[projetoArea] || [projetoArea];
+    const matched = terms.find((t) => editalHay.includes(normalizeIndicacaoText(t)));
+    if (matched) {
+      score += 30;
+      motivos.push("Área do projeto alinhada ao edital");
+    }
+  }
+
+  // Sobreposição lexical simples (tokens >= 4 chars)
+  const tokens = [...new Set(projetoHay.split(/[^a-z0-9]+/).filter((t) => t.length >= 4))].slice(0, 80);
+  let hits = 0;
+  for (const t of tokens) {
+    if (editalHay.includes(t)) hits += 1;
+  }
+  if (hits >= 5) {
+    score += Math.min(30, hits * 2);
+    motivos.push("Conteúdo escrito do projeto compatível com o edital");
+  } else if (hits >= 3) {
+    score += Math.min(25, hits * 3);
+    motivos.push("Conteúdo do projeto compatível com o edital");
+  } else if (hits >= 1) {
+    score += hits * 4;
+  }
+
+  const deadline = editalIndicacaoDeadline(edital);
+  if (deadline) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const end = new Date(deadline);
+    end.setHours(23, 59, 59, 999);
+    if (end.getTime() >= today.getTime()) {
+      score += 15;
+      motivos.push("Prazo ainda aberto");
+    } else {
+      score -= 35;
+      motivos.push("Prazo possivelmente encerrado");
+    }
+  }
+
+  if (edital.valor_projeto || edital.valor) score += 5;
+
+  const finalScore = Math.max(0, Math.min(100, Math.round(score)));
+  return { score: finalScore, motivos: [...new Set(motivos)].slice(0, 5) };
+}
+
+async function refreshMyIndicacoesFallback(
+  supabase: SupabaseClient,
+  userId: string,
+  limit: number,
+  empresaId?: string | null,
+): Promise<number> {
   const { data: profile, error: profileError } = await supabase
     .from("profiles")
     .select("user_id,user_type,area,curriculum_data")
     .eq("user_id", userId)
     .maybeSingle();
   if (profileError) throw new Error(profileError.message);
+
+  let scoringProfile: Record<string, unknown> = profile || { user_type: "pesquisador" };
+  const scopedEmpresaId = empresaId ? String(empresaId).trim() : "";
+
+  if (scopedEmpresaId) {
+    const { data: empresa, error: empresaError } = await supabase
+      .from("empresas")
+      .select("id,owner_user_id,area,dados,razao_social")
+      .eq("id", scopedEmpresaId)
+      .eq("owner_user_id", userId)
+      .maybeSingle();
+    if (empresaError) throw new Error(empresaError.message);
+    if (!empresa) throw new Error("empresa_id inválido ou sem permissão");
+    const dados = empresa.dados && typeof empresa.dados === "object" ? (empresa.dados as Record<string, unknown>) : {};
+    scoringProfile = {
+      user_type: "consultor",
+      area: empresa.area || profile?.area || "",
+      curriculum_data: {
+        resumo: dados.descricao || empresa.razao_social || "",
+      },
+    };
+  }
 
   const { data: editais, error: editaisError } = await supabase
     .from("editais_corretos")
@@ -301,20 +516,23 @@ async function refreshMyIndicacoesFallback(supabase: SupabaseClient, userId: str
 
   const ranked = (editais || [])
     .map((edital: any) => {
-      const scored = scoreIndicacao(profile || { user_type: "pesquisador" }, edital);
+      const scored = scoreIndicacao(scoringProfile, edital);
       return { edital, ...scored };
     })
     .filter((x) => x.score >= 25)
     .sort((a, b) => b.score - a.score)
     .slice(0, Math.max(1, Math.min(50, limit)));
 
-  const { error: deleteError } = await supabase.from("edital_indicacoes").delete().eq("user_id", userId);
+  let del = supabase.from("edital_indicacoes").delete().eq("user_id", userId);
+  del = scopedEmpresaId ? del.eq("empresa_id", scopedEmpresaId) : del.is("empresa_id", null);
+  const { error: deleteError } = await del;
   if (deleteError) throw new Error(deleteError.message);
 
   if (!ranked.length) return 0;
 
   const rows = ranked.map((x) => ({
     user_id: userId,
+    empresa_id: scopedEmpresaId || null,
     edital_id: x.edital.id,
     score: x.score,
     motivos: x.motivos,
@@ -546,15 +764,19 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       if (error) throw error;
     },
 
-    async adminListPropostas({ limit, offset, status, userId, editalId }) {
+    async adminListPropostas({ limit, offset, status, userId, editalId, empresaId }) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
       let q = supabase
         .from("propostas")
-        .select("id,user_id,edital_id,status,progresso,gerado_com_ia,criado_em,atualizado_em", { count: "exact" })
+        .select(
+          "id,user_id,edital_id,empresa_id,projeto_id,status,progresso,gerado_com_ia,criado_em,atualizado_em",
+          { count: "exact" },
+        )
         .order("atualizado_em", { ascending: false });
       if (status) q = q.eq("status", status);
       if (userId) q = q.eq("user_id", userId);
       if (editalId) q = q.eq("edital_id", editalId);
+      if (empresaId) q = q.eq("empresa_id", empresaId);
       q = q.range(offset, offset + limit - 1);
       const { data, error, count } = await q;
       if (error) throw new Error(error.message);
@@ -774,6 +996,32 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
 
     async createProposta(input) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const projetoId = input.projetoId ? String(input.projetoId).trim() : "";
+      let empresaId = input.empresaId ? String(input.empresaId).trim() : "";
+
+      if (projetoId) {
+        const { data: projeto, error: projetoError } = await supabase
+          .from("projetos")
+          .select("id,owner_user_id,empresa_id")
+          .eq("id", projetoId)
+          .eq("owner_user_id", input.userId)
+          .maybeSingle();
+        if (projetoError) throw new Error(projetoError.message);
+        if (!projeto) throw new Error("projeto_id inválido ou sem permissão");
+        if (!empresaId && projeto.empresa_id) empresaId = String(projeto.empresa_id);
+      }
+
+      if (empresaId) {
+        const { data: empresa, error: empresaError } = await supabase
+          .from("empresas")
+          .select("id")
+          .eq("id", empresaId)
+          .eq("owner_user_id", input.userId)
+          .maybeSingle();
+        if (empresaError) throw new Error(empresaError.message);
+        if (!empresa) throw new Error("empresa_id inválido ou sem permissão");
+      }
+
       const { data, error } = await supabase
         .from("propostas")
         .insert({
@@ -783,6 +1031,8 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
           progresso: 0,
           campos_formulario: input.campos_formulario || {},
           gerado_com_ia: input.gerado_com_ia,
+          ...(projetoId ? { projeto_id: projetoId } : {}),
+          ...(empresaId ? { empresa_id: empresaId } : {}),
         })
         .select("*")
         .single();
@@ -863,29 +1113,39 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       if (error) throw new Error(error.message);
     },
 
-    async refreshMyIndicacoes(userId, limit) {
+    async refreshMyIndicacoes(userId, limit, empresaId) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
-      const { data, error } = await supabase.rpc("refresh_my_indicacoes", { p_user_id: userId, p_limit: limit } as any);
+      const scoped = empresaId ? String(empresaId).trim() : "";
+      if (scoped) {
+        const owned = await this.getEmpresaForUser(userId, scoped);
+        if (!owned) throw new Error("empresa_id inválido ou sem permissão");
+      }
+      const rpcArgs: Record<string, unknown> = { p_user_id: userId, p_limit: limit };
+      if (scoped) rpcArgs.p_empresa_id = scoped;
+      const { data, error } = await supabase.rpc("refresh_my_indicacoes", rpcArgs as any);
       if (error) {
         const msg = String(error.message || "");
-        if (/refresh_my_indicacoes|schema cache|function .*not found|could not find the function/i.test(msg)) {
-          console.warn(`[indicacoes] RPC refresh_my_indicacoes ausente; usando fallback local. (${msg})`);
-          return refreshMyIndicacoesFallback(supabase, userId, limit);
+        if (/refresh_my_indicacoes|schema cache|function .*not found|could not find the function|p_empresa_id/i.test(msg)) {
+          console.warn(`[indicacoes] RPC refresh_my_indicacoes ausente/incompatível; usando fallback local. (${msg})`);
+          return refreshMyIndicacoesFallback(supabase, userId, limit, scoped || null);
         }
         throw new Error(error.message);
       }
       return typeof data === "number" ? data : Number(data ?? 0);
     },
 
-    async fetchMyIndicacoes(userId, limit) {
+    async fetchMyIndicacoes(userId, limit, empresaId) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
-      const { data, error } = await supabase
+      const scoped = empresaId ? String(empresaId).trim() : "";
+      let q = supabase
         .from("edital_indicacoes")
-        .select("edital_id,score,motivos,gerado_em")
+        .select("edital_id,empresa_id,score,motivos,gerado_em")
         .eq("user_id", userId)
         .order("score", { ascending: false })
         .order("gerado_em", { ascending: false })
         .limit(limit);
+      q = scoped ? q.eq("empresa_id", scoped) : q.is("empresa_id", null);
+      const { data, error } = await q;
       if (error) throw new Error(error.message);
       const rows = data || [];
       const ids = [...new Set(rows.map((r: any) => String(r.edital_id || "").trim()).filter(Boolean))];
@@ -903,6 +1163,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
           score: r.score,
           motivos: r.motivos,
           gerado_em: r.gerado_em,
+          empresa_id: r.empresa_id ?? null,
           edital: byId.get(String(r.edital_id)) || null,
         }))
         .filter((r: any) => r.edital != null);
@@ -917,13 +1178,217 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
 
     async updateProfile(userId, patch) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const normalized = { ...patch };
+      if (normalized.user_type === "pessoa-empresa" || normalized.user_type === "ambos") {
+        normalized.user_type = "consultor";
+      }
+      // NOT NULL em profiles: nunca gravar null via upsert parcial.
+      for (const key of ["data_collection_consent", "has_cnpj", "user_type"] as const) {
+        if (normalized[key] === null || normalized[key] === undefined) {
+          delete normalized[key];
+        }
+      }
       const { data, error } = await supabase
         .from("profiles")
-        .upsert({ user_id: userId, ...patch }, { onConflict: "user_id" })
+        .upsert({ user_id: userId, ...normalized }, { onConflict: "user_id" })
         .select("*")
         .maybeSingle();
       if (error) throw new Error(error.message);
       return data;
+    },
+
+    async listEmpresasForUser(userId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("empresas")
+        .select("*")
+        .eq("owner_user_id", userId)
+        .order("atualizado_em", { ascending: false });
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+
+    async getEmpresaForUser(userId, empresaId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("empresas")
+        .select("*")
+        .eq("id", empresaId)
+        .eq("owner_user_id", userId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data || null;
+    },
+
+    async createEmpresa(input) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const cnpj = input.cnpj ? String(input.cnpj).replace(/\D/g, "").slice(0, 14) : null;
+      const { data, error } = await supabase
+        .from("empresas")
+        .insert({
+          owner_user_id: input.userId,
+          razao_social: String(input.razao_social || "").trim() || "Empresa",
+          nome_fantasia: input.nome_fantasia ? String(input.nome_fantasia).trim() : null,
+          cnpj: cnpj || null,
+          area: input.area ? String(input.area).trim() : null,
+          dados: input.dados || {},
+        })
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async updateEmpresaForUser(userId, empresaId, patch) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const allowed: Record<string, any> = { atualizado_em: new Date().toISOString() };
+      for (const key of ["razao_social", "nome_fantasia", "area", "dados"] as const) {
+        if (patch[key] !== undefined) allowed[key] = patch[key];
+      }
+      if (patch.cnpj !== undefined) {
+        allowed.cnpj = patch.cnpj == null ? null : String(patch.cnpj).replace(/\D/g, "").slice(0, 14) || null;
+      }
+      const { data, error } = await supabase
+        .from("empresas")
+        .update(allowed)
+        .eq("id", empresaId)
+        .eq("owner_user_id", userId)
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async deleteEmpresaForUser(userId, empresaId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { error } = await supabase.from("empresas").delete().eq("id", empresaId).eq("owner_user_id", userId);
+      if (error) throw new Error(error.message);
+    },
+
+    async listProjetosForUser(userId, empresaId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      let q = supabase
+        .from("projetos")
+        .select("*")
+        .eq("owner_user_id", userId)
+        .order("atualizado_em", { ascending: false });
+      if (empresaId) q = q.eq("empresa_id", empresaId);
+      const { data, error } = await q;
+      if (error) throw new Error(error.message);
+      return data || [];
+    },
+
+    async getProjetoForUser(userId, projetoId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { data, error } = await supabase
+        .from("projetos")
+        .select("*")
+        .eq("id", projetoId)
+        .eq("owner_user_id", userId)
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      return data || null;
+    },
+
+    async createProjeto(input) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      if (input.empresa_id) {
+        const owned = await this.getEmpresaForUser(input.userId, input.empresa_id);
+        if (!owned) throw new Error("empresa_id inválido ou sem permissão");
+      }
+      const publico = ["pesquisador", "empresa", "ambos"].includes(String(input.publico_alvo || ""))
+        ? String(input.publico_alvo)
+        : "ambos";
+      const status = ["rascunho", "ativo", "arquivado"].includes(String(input.status || ""))
+        ? String(input.status)
+        : "rascunho";
+      const { data, error } = await supabase
+        .from("projetos")
+        .insert({
+          owner_user_id: input.userId,
+          empresa_id: input.empresa_id || null,
+          titulo: String(input.titulo || "").trim() || "Projeto sem título",
+          resumo: input.resumo ? String(input.resumo).trim() : null,
+          objetivos: input.objetivos ? String(input.objetivos).trim() : null,
+          area: input.area ? String(input.area).trim() : null,
+          publico_alvo: publico,
+          status,
+          conteudo: input.conteudo || {},
+        })
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async updateProjetoForUser(userId, projetoId, patch) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const allowed: Record<string, any> = { atualizado_em: new Date().toISOString() };
+      for (const key of ["titulo", "resumo", "objetivos", "area", "conteudo"] as const) {
+        if (patch[key] !== undefined) allowed[key] = patch[key];
+      }
+      if (patch.publico_alvo !== undefined) {
+        if (!["pesquisador", "empresa", "ambos"].includes(String(patch.publico_alvo))) {
+          throw new Error("publico_alvo inválido");
+        }
+        allowed.publico_alvo = patch.publico_alvo;
+      }
+      if (patch.status !== undefined) {
+        if (!["rascunho", "ativo", "arquivado"].includes(String(patch.status))) {
+          throw new Error("status inválido");
+        }
+        allowed.status = patch.status;
+      }
+      if (patch.empresa_id !== undefined) {
+        if (patch.empresa_id) {
+          const owned = await this.getEmpresaForUser(userId, String(patch.empresa_id));
+          if (!owned) throw new Error("empresa_id inválido ou sem permissão");
+          allowed.empresa_id = patch.empresa_id;
+        } else {
+          allowed.empresa_id = null;
+        }
+      }
+      const { data, error } = await supabase
+        .from("projetos")
+        .update(allowed)
+        .eq("id", projetoId)
+        .eq("owner_user_id", userId)
+        .select("*")
+        .single();
+      if (error) throw new Error(error.message);
+      return data;
+    },
+
+    async deleteProjetoForUser(userId, projetoId) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const { error } = await supabase.from("projetos").delete().eq("id", projetoId).eq("owner_user_id", userId);
+      if (error) throw new Error(error.message);
+    },
+
+    async matchEditaisForProjeto(userId, projetoId, limit) {
+      if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
+      const projeto = await this.getProjetoForUser(userId, projetoId);
+      if (!projeto) throw new Error("Projeto não encontrado");
+
+      const { data: editais, error } = await supabase
+        .from("editais_corretos")
+        .select(
+          "id,numero,titulo,descricao,data_encerramento,status,valor,valor_projeto,prazo_inscricao,area,orgao,fonte,link,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,criado_em,atualizado_em",
+        )
+        .order("validado_em", { ascending: false })
+        .range(0, 499);
+      if (error) throw new Error(error.message);
+
+      const ranked = (editais || [])
+        .map((edital: any) => {
+          const { score, motivos } = scoreProjetoContraEdital(projeto, edital);
+          return { score, motivos, edital };
+        })
+        .filter((r) => r.score >= 25)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit);
+
+      return ranked;
     },
 
     async getReferralStats(userId) {
@@ -954,6 +1419,33 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         if (prop?.campos_formulario) {
           try {
             const raw = JSON.stringify(prop.campos_formulario);
+            formSummary = raw.length > 6000 ? `${raw.slice(0, 6000)}\n…` : raw;
+          } catch {
+            formSummary = "";
+          }
+        }
+      }
+
+      if (!formSummary && input.projetoId) {
+        const projetoId = String(input.projetoId).trim();
+        const { data: proj, error: projErr } = await supabase
+          .from("projetos")
+          .select("titulo,resumo,objetivos,area,publico_alvo,conteudo")
+          .eq("id", projetoId)
+          .maybeSingle();
+        if (projErr) throw new Error(projErr.message);
+        if (proj) {
+          try {
+            const payload = {
+              tipo: "projeto",
+              titulo: proj.titulo,
+              resumo: proj.resumo,
+              objetivos: proj.objetivos,
+              area: proj.area,
+              publico_alvo: proj.publico_alvo,
+              conteudo: proj.conteudo,
+            };
+            const raw = JSON.stringify(payload);
             formSummary = raw.length > 6000 ? `${raw.slice(0, 6000)}\n…` : raw;
           } catch {
             formSummary = "";
@@ -1175,6 +1667,58 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         throw new Error(upsertErr.message);
       }
       return { allowed: true, used: nextIds.length, limit: safeLimit, accessedIds: nextIds };
+    },
+
+    async getPublicCatalogStats() {
+      if (!supabase) {
+        return {
+          editaisCorretosCount: 0,
+          editaisAnalisadosCount: 0,
+          fontesCount: 0,
+          potencialBRL: 0,
+          editaisComValor: 0,
+        };
+      }
+
+      const [corretosCountRes, analisadosCountRes] = await Promise.all([
+        supabase.from("editais_corretos").select("id", { count: "exact", head: true }),
+        supabase.from("editais").select("id", { count: "exact", head: true }),
+      ]);
+      if (corretosCountRes.error) throw new Error(corretosCountRes.error.message);
+      if (analisadosCountRes.error) throw new Error(analisadosCountRes.error.message);
+
+      const fontes = new Set<string>();
+      const valorRows: Array<{ valor_projeto?: unknown; valor?: unknown }> = [];
+      const pageSize = 1000;
+      let from = 0;
+      for (;;) {
+        const to = from + pageSize - 1;
+        const { data, error } = await supabase
+          .from("editais_corretos")
+          .select("fonte,valor_projeto,valor")
+          .range(from, to);
+        if (error) throw new Error(error.message);
+        const batch = data ?? [];
+        for (const row of batch) {
+          const fonte = String((row as any).fonte || "").trim();
+          if (fonte) fontes.add(fonte);
+          valorRows.push({
+            valor_projeto: (row as any).valor_projeto,
+            valor: (row as any).valor,
+          });
+        }
+        if (batch.length < pageSize) break;
+        from += pageSize;
+      }
+
+      const arrecadacao = computeArrecadacaoCatalogo(valorRows);
+      return {
+        editaisCorretosCount: corretosCountRes.count ?? 0,
+        editaisAnalisadosCount: analisadosCountRes.count ?? 0,
+        fontesCount: fontes.size,
+        potencialBRL: arrecadacao.totalBRL,
+        editaisComValor: arrecadacao.editaisComValor,
+      };
     },
   };
 

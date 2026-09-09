@@ -117,6 +117,14 @@ export function buildRouter(deps: {
   );
 
   router.get(
+    "/api/public/catalog-stats",
+    asyncRoute(async (_req, res) => {
+      const out = await deps.app.publicCatalogStats();
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
     "/api/editais",
     asyncRoute(async (req, res) => {
       const out = await deps.app.listEditais(req);
@@ -200,6 +208,103 @@ export function buildRouter(deps: {
     "/api/profile",
     asyncRoute(async (req, res) => {
       const out = await deps.app.patchProfile(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
+    "/api/empresas",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.listEmpresas(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
+    "/api/empresas/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.getEmpresa(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/empresas",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.createEmpresa(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.patch(
+    "/api/empresas/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.patchEmpresa(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.delete(
+    "/api/empresas/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.deleteEmpresa(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
+    "/api/projetos",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.listProjetos(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
+    "/api/projetos/:id/editais",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.matchProjetoEditais(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/projetos/:id/gerar-proposta",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.gerarPropostaFromProjeto(req, res);
+      if (out.status === 0) return; // NDJSON já enviado
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.get(
+    "/api/projetos/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.getProjeto(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/projetos",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.createProjeto(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.patch(
+    "/api/projetos/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.patchProjeto(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.delete(
+    "/api/projetos/:id",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.deleteProjeto(req);
       res.status(out.status).json(out.body);
     }),
   );

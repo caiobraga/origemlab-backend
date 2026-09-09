@@ -193,6 +193,7 @@ export function buildAuthUseCases(deps: {
 
       const userId = await deps.auth.getUserIdFromAccessToken(accessToken);
       if (!userId) return { status: 401, body: { error: "invalid_token" } };
+      const email = await deps.auth.getEmailFromAccessToken(accessToken);
 
       if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
         expiresAtMs = Date.now() + 3600_000;
@@ -201,6 +202,7 @@ export function buildAuthUseCases(deps: {
       const sid = newSessionId();
       deps.sessions.set(sid, {
         userId,
+        email,
         accessToken,
         refreshToken,
         expiresAtMs,
@@ -211,7 +213,7 @@ export function buildAuthUseCases(deps: {
         secure: cookieSecureForRequest(req, deps.config.auth.cookieSecure),
         maxAgeSeconds: sessionMaxAgeSeconds(),
       });
-      return { status: 200, body: { ok: true, user: { id: userId } } };
+      return { status: 200, body: { ok: true, user: { id: userId, email } } };
     },
 
     async me(req) {
@@ -219,13 +221,23 @@ export function buildAuthUseCases(deps: {
         const sid = getCookie(req, deps.config.auth.cookieName);
         if (sid) {
           const s = deps.sessions.get(sid);
-          if (s) return { status: 200, body: { user: { id: s.userId, email: s.email ?? null } } };
+          if (s) {
+            let email = s.email ?? null;
+            if (!email && s.accessToken) {
+              email = await deps.auth.getEmailFromAccessToken(s.accessToken);
+              if (email) deps.sessions.set(sid, { ...s, email });
+            }
+            return { status: 200, body: { user: { id: s.userId, email } } };
+          }
         }
 
         const bearer = extractBearerToken(req);
         if (bearer) {
           const userId = await deps.auth.getUserIdFromAccessToken(bearer);
-          if (userId) return { status: 200, body: { user: { id: userId, email: null } } };
+          if (userId) {
+            const email = await deps.auth.getEmailFromAccessToken(bearer);
+            return { status: 200, body: { user: { id: userId, email } } };
+          }
         }
 
         return { status: 200, body: { user: null } };

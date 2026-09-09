@@ -29,25 +29,34 @@ export type AuthGateway = {
     expiresAtMs: number;
   }>;
   getUserIdFromAccessToken(accessToken: string): Promise<string | null>;
+  /** Best-effort email from token (JWT claim or getUser). */
+  getEmailFromAccessToken(accessToken: string): Promise<string | null>;
 };
 
 /** Valida exp do JWT Supabase sem chamar a API (fallback se getUser falhar). */
-function userIdFromJwtPayload(accessToken: string): string | null {
+function claimsFromJwtPayload(accessToken: string): { userId: string; email: string | null } | null {
   try {
     const part = accessToken.split(".")[1];
     if (!part) return null;
     const payload = JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as {
       sub?: string;
+      email?: string;
       exp?: number;
     };
     if (typeof payload.sub !== "string" || !payload.sub) return null;
     if (typeof payload.exp === "number" && payload.exp * 1000 <= Date.now() + 5_000) {
       return null;
     }
-    return payload.sub;
+    const email =
+      typeof payload.email === "string" && payload.email.trim() ? payload.email.trim() : null;
+    return { userId: payload.sub, email };
   } catch {
     return null;
   }
+}
+
+function userIdFromJwtPayload(accessToken: string): string | null {
+  return claimsFromJwtPayload(accessToken)?.userId ?? null;
 }
 
 export function buildSupabaseAuthGateway(config: AppConfig): AuthGateway {
@@ -138,6 +147,18 @@ export function buildSupabaseAuthGateway(config: AppConfig): AuthGateway {
         // rede / timeout — usa payload local
       }
       return userIdFromJwtPayload(accessToken);
+    },
+    async getEmailFromAccessToken(accessToken) {
+      const fromJwt = claimsFromJwtPayload(accessToken)?.email ?? null;
+      if (fromJwt) return fromJwt;
+      try {
+        const { data } = await supabase.auth.getUser(accessToken);
+        const email = data.user?.email;
+        if (typeof email === "string" && email.trim()) return email.trim();
+      } catch {
+        /* ignore */
+      }
+      return null;
     },
   };
 }
