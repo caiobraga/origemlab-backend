@@ -780,7 +780,37 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       q = q.range(offset, offset + limit - 1);
       const { data, error, count } = await q;
       if (error) throw new Error(error.message);
-      return { count: count ?? null, rows: data || [] };
+      const rows = data || [];
+
+      // Mesmos campos que getPropostaForUser devolve — sem isso a lista mostrava "Sem título / Não informado".
+      const editalIds = [...new Set(rows.map((r: any) => String(r.edital_id || "").trim()).filter(Boolean))];
+      const editalById = new Map<string, any>();
+      if (editalIds.length) {
+        const cols = "id,titulo,orgao,valor_projeto,fonte";
+        const { data: corretos, error: e1 } = await supabase.from("editais_corretos").select(cols).in("id", editalIds);
+        if (e1) throw new Error(e1.message);
+        for (const ed of corretos || []) editalById.set(String((ed as any).id), ed);
+        const missing = editalIds.filter((id) => !editalById.has(id));
+        if (missing.length) {
+          const { data: brutos, error: e2 } = await supabase.from("editais").select(cols).in("id", missing);
+          if (e2) throw new Error(e2.message);
+          for (const ed of brutos || []) editalById.set(String((ed as any).id), ed);
+        }
+      }
+
+      return {
+        count: count ?? null,
+        rows: rows.map((r: any) => {
+          const ed = editalById.get(String(r.edital_id || "").trim());
+          return {
+            ...r,
+            edital_titulo: ed?.titulo ?? null,
+            edital_orgao: ed?.orgao ?? null,
+            edital_valor: ed?.valor_projeto ?? null,
+            edital_fonte: ed?.fonte ?? null,
+          };
+        }),
+      };
     },
 
     async adminUpdateProposta(id, patch) {
