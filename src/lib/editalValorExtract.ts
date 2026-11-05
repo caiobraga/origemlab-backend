@@ -232,7 +232,56 @@ export function extractBRLAmountsFromValue(value: unknown): number[] {
   return [];
 }
 
+/**
+ * `valor_projeto` estruturado (gravado pelo process-edital): `valor` só tem o valor POR PROJETO;
+ * o orçamento global da chamada fica em `total_programa*`. Linhas antigas (`{ valor: [...] }` ou texto)
+ * não têm `por_projeto_origem` e retornam null.
+ */
+export type ValorProjetoEstruturado = {
+  valor: string[];
+  bolsas: string[];
+  por_projeto_min: number | null;
+  por_projeto_max: number | null;
+  por_projeto_origem: "edital" | "projeto_unico" | null;
+  total_programa: number | null;
+  total_programa_texto: string | null;
+  qtd_projetos: number | null;
+};
+
+export function parseValorProjetoEstruturado(value: unknown): ValorProjetoEstruturado | null {
+  let obj: Record<string, unknown> | null = null;
+  if (typeof value === "string" && value.trim().startsWith("{")) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) obj = parsed;
+    } catch {
+      return null;
+    }
+  } else if (value && typeof value === "object" && !Array.isArray(value)) {
+    obj = value as Record<string, unknown>;
+  }
+  if (!obj || !("por_projeto_origem" in obj)) return null;
+  const lines = (v: unknown) =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null);
+  const origem = obj.por_projeto_origem;
+  return {
+    valor: lines(obj.valor),
+    bolsas: lines(obj.bolsas),
+    por_projeto_min: num(obj.por_projeto_min),
+    por_projeto_max: num(obj.por_projeto_max),
+    por_projeto_origem: origem === "edital" || origem === "projeto_unico" ? origem : null,
+    total_programa: num(obj.total_programa),
+    total_programa_texto: typeof obj.total_programa_texto === "string" ? obj.total_programa_texto : null,
+    qtd_projetos: num(obj.qtd_projetos),
+  };
+}
+
 export function extractValorEnvelopeBRL(valorProjeto: unknown, valorFallback?: unknown): number | null {
+  // Formato estruturado: só o teto por projeto conta (o total da chamada não é o que um proponente capta).
+  const estruturado = parseValorProjetoEstruturado(valorProjeto);
+  if (estruturado) return estruturado.por_projeto_max;
+
   const texts: string[] = [];
   for (const v of [valorProjeto, valorFallback]) {
     if (typeof v === "string") texts.push(v);
