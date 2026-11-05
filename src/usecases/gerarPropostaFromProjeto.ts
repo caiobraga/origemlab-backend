@@ -212,7 +212,7 @@ function enforceWordLimit(text: string, wordLimit: number | null | undefined): s
   return words.slice(0, wordLimit).join(" ");
 }
 
-function flattenProjetoForPrompt(projeto: any): string {
+export function flattenProjetoForPrompt(projeto: any): string {
   const c = asRecord(projeto?.conteudo);
   const origem = asRecord(c.origem);
   const parts = [

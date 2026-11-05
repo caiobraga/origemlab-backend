@@ -6,6 +6,7 @@ import { formatReferencesForPrompt, searchWeb, type WebSearchHit } from "../infr
 import type { AuthUseCases } from "./auth.js";
 import { requireProSubscription } from "./subscriptionGuard.js";
 import { aiErrorResponse } from "../http/errors.js";
+import { flattenProjetoForPrompt } from "./gerarPropostaFromProjeto.js";
 
 export type ProposalFieldAiUseCases = {
   generateFieldText(req: Request): Promise<{ status: number; body: any }>;
@@ -141,17 +142,36 @@ function trimPromptBlock(text: string, max: number): string {
   return `${s.slice(0, max)}\n…`;
 }
 
+type FieldContext = { editalSummary: string; formSummary: string; projetoSummary: string };
+
+function isProjetoOnly(body: FieldBody): boolean {
+  return Boolean(body.projeto_id) && !body.edital_id && !body.proposta_id;
+}
+
+/** Estado atual da página do projeto (inclui o que ainda não foi salvo). */
+function liveProjetoFromFormData(formData: unknown): Record<string, any> | null {
+  if (!formData || typeof formData !== "object" || Array.isArray(formData)) return null;
+  const fd = formData as Record<string, any>;
+  if (!fd.conteudo || typeof fd.conteudo !== "object") return null;
+  return {
+    ...(fd.titulo ? { titulo: String(fd.titulo) } : {}),
+    conteudo: fd.conteudo,
+  };
+}
+
 async function resolveContext(
   deps: { supabase: SupabaseGateway },
   body: FieldBody,
-): Promise<{ editalSummary: string; formSummary: string }> {
+): Promise<FieldContext> {
   const ctx = await deps.supabase.fetchAiFieldContext({
     editalId: body.edital_id || undefined,
     propostaId: body.proposta_id || undefined,
     projetoId: body.projeto_id || undefined,
   });
+  const live = isProjetoOnly(body) ? liveProjetoFromFormData(body.form_data) : null;
+  const projeto = live ? { ...(ctx.projeto || {}), ...live } : ctx.projeto;
   let formSummary = ctx.formSummary;
-  if (!formSummary && body.form_data) {
+  if (!formSummary && !projeto && body.form_data) {
     try {
       const raw = JSON.stringify(body.form_data);
       formSummary = raw.length > 2500 ? `${raw.slice(0, 2500)}\n…` : raw;
@@ -162,13 +182,14 @@ async function resolveContext(
   return {
     editalSummary: trimPromptBlock(ctx.editalSummary, 2500),
     formSummary: trimPromptBlock(formSummary, 2000),
+    projetoSummary: projeto ? trimPromptBlock(flattenProjetoForPrompt(projeto), 9000) : "",
   };
 }
 
 /** Prompt “antigo” / base da tarefa de redação do campo (gerar ou melhorar). */
 function buildOriginalTaskPrompt(
   body: FieldBody,
-  ctx: { editalSummary: string; formSummary: string },
+  ctx: FieldContext,
   mode: "generate" | "improve",
 ): string {
   const lang = body.target_language === "en" ? "inglês (en)" : "português (pt-BR)";
@@ -179,7 +200,7 @@ function buildOriginalTaskPrompt(
     .filter(Boolean)
     .join("\n");
 
-  const isProjeto = Boolean(body.projeto_id) && !body.edital_id && !body.proposta_id;
+  const isProjeto = isProjetoOnly(body);
   const parts = [
     isProjeto
       ? "Você é um assistente especializado em redigir textos de projetos de pesquisa/inovação para fomento."
@@ -190,6 +211,11 @@ function buildOriginalTaskPrompt(
     body.field_description ? `Descrição do campo: ${body.field_description}` : "",
     limits,
     "",
+    ctx.projetoSummary
+      ? isProjeto
+        ? `Dados do projeto (base principal — use estes fatos e não invente dados que não estejam aqui):\n${ctx.projetoSummary}`
+        : `Dados do projeto de origem desta proposta (base principal — use estes fatos e não invente dados que não estejam aqui):\n${ctx.projetoSummary}`
+      : "",
     ctx.formSummary
       ? isProjeto
         ? `Contexto do projeto (prioridade — baseie o texto nestes dados):\n${ctx.formSummary}`
@@ -206,7 +232,9 @@ function buildOriginalTaskPrompt(
       "Tarefa: Gere um texto completo e bem estruturado para este campo.",
       isProjeto
         ? "Descreva O PROJETO ESPECÍFICO (objetivos, método, resultados esperados, inovação), usando o contexto do projeto como base."
-        : "Descreva O PROJETO ESPECÍFICO da proposta (objetivos, método, resultados esperados, inovação), usando o formulário como base.",
+        : ctx.projetoSummary
+          ? "Descreva O PROJETO ESPECÍFICO da proposta (objetivos, método, resultados esperados, inovação), usando os dados do projeto e o formulário como base."
+          : "Descreva O PROJETO ESPECÍFICO da proposta (objetivos, método, resultados esperados, inovação), usando o formulário como base.",
       "Não repita a descrição genérica do edital/programa de fomento nem copie trechos do contexto do edital.",
       "Não repita parágrafos, frases ou ideias — cada parágrafo deve trazer informação nova.",
       body.word_limit && body.word_limit >= 400

@@ -141,7 +141,7 @@ export type SupabaseGateway = {
     editalId?: string;
     propostaId?: string;
     projetoId?: string;
-  }): Promise<{ editalSummary: string; formSummary: string }>;
+  }): Promise<{ editalSummary: string; formSummary: string; projeto: Record<string, any> | null }>;
   fetchEditalChatContext(input: {
     editalId: string;
     query: string;
@@ -1454,17 +1454,20 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
 
       let editalId = input.editalId ? String(input.editalId).trim() : "";
+      let projetoId = input.projetoId ? String(input.projetoId).trim() : "";
       let formSummary = "";
+      let projeto: Record<string, any> | null = null;
 
       if (input.propostaId) {
         const pid = String(input.propostaId).trim();
         const { data: prop, error: propErr } = await supabase
           .from("propostas")
-          .select("edital_id, campos_formulario")
+          .select("edital_id, projeto_id, campos_formulario")
           .eq("id", pid)
           .maybeSingle();
         if (propErr) throw new Error(propErr.message);
         if (prop?.edital_id && !editalId) editalId = String(prop.edital_id);
+        if (prop?.projeto_id && !projetoId) projetoId = String(prop.projeto_id);
         if (prop?.campos_formulario) {
           try {
             const raw = JSON.stringify(prop.campos_formulario);
@@ -1475,31 +1478,14 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         }
       }
 
-      if (!formSummary && input.projetoId) {
-        const projetoId = String(input.projetoId).trim();
+      if (projetoId) {
         const { data: proj, error: projErr } = await supabase
           .from("projetos")
           .select("titulo,resumo,objetivos,area,publico_alvo,conteudo")
           .eq("id", projetoId)
           .maybeSingle();
         if (projErr) throw new Error(projErr.message);
-        if (proj) {
-          try {
-            const payload = {
-              tipo: "projeto",
-              titulo: proj.titulo,
-              resumo: proj.resumo,
-              objetivos: proj.objetivos,
-              area: proj.area,
-              publico_alvo: proj.publico_alvo,
-              conteudo: proj.conteudo,
-            };
-            const raw = JSON.stringify(payload);
-            formSummary = raw.length > 6000 ? `${raw.slice(0, 6000)}\n…` : raw;
-          } catch {
-            formSummary = "";
-          }
-        }
+        projeto = (proj as Record<string, any>) || null;
       }
 
       let editalSummary = "";
@@ -1531,7 +1517,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         }
       }
 
-      return { editalSummary, formSummary };
+      return { editalSummary, formSummary, projeto };
     },
 
     async fetchEditalChatContext(input) {
