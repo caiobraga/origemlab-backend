@@ -1,7 +1,7 @@
 import type { Request } from "express";
 import type { AppConfig } from "../config.js";
 import type { StripeGateway, SupabaseGateway } from "../infra/gateways.js";
-import { HttpError } from "../http/errors.js";
+import { errorResponse, HttpError, UNAVAILABLE_PUBLIC_ERROR } from "../http/errors.js";
 import { getBearerToken } from "../http/auth.js";
 
 function appBaseUrl(config: AppConfig, req: Request): string {
@@ -37,7 +37,7 @@ export function buildStripeBillingUseCases(deps: {
       if (!deps.stripe.hasStripe) {
         return {
           status: 503,
-          body: { error: "Stripe não configurado (AISELFIE_STRIPE_SECRET_KEY)" },
+          body: { error: UNAVAILABLE_PUBLIC_ERROR },
         };
       }
 
@@ -49,7 +49,7 @@ export function buildStripeBillingUseCases(deps: {
             error:
               authErr === "no_bearer"
                 ? "Faça login para assinar."
-                : "Sessão inválida ou servidor sem Supabase service role.",
+                : "Sessão inválida. Entre novamente.",
           },
         };
       }
@@ -61,13 +61,13 @@ export function buildStripeBillingUseCases(deps: {
 
       const priceId = await deps.supabase.getActivePriceIdForPlan(planKey);
       if (!priceId) {
+        console.error(
+          `[stripeBilling.createCheckoutSession] plano ${planKey} sem billing_plans.stripe_price_id (configure em /admin → Pagamentos).`,
+        );
         return {
           status: 503,
           body: {
-            error:
-              planKey === "pro"
-                ? "Plano Pro não configurado. Defina `billing_plans.stripe_price_id` via /admin → Pagamentos."
-                : "Plano Empresas não configurado. Defina `billing_plans.stripe_price_id` via /admin → Pagamentos.",
+            error: "Este plano está temporariamente indisponível para assinatura. Tente novamente mais tarde.",
           },
         };
       }
@@ -85,21 +85,20 @@ export function buildStripeBillingUseCases(deps: {
         });
         return { status: 200, body: { url: session.url } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "checkout failed";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "stripeBilling.createCheckoutSession");
       }
     },
 
     async createPortalSession(req) {
       if (!deps.stripe.hasStripe) {
-        return { status: 503, body: { error: "Stripe não configurado" } };
+        return { status: 503, body: { error: UNAVAILABLE_PUBLIC_ERROR } };
       }
 
       const { user } = await getUserFromBearer(deps.supabase, req);
       if (!user) return { status: 401, body: { error: "Não autorizado" } };
 
       if (!deps.supabase.isConfigured) {
-        return { status: 503, body: { error: "Supabase service role não configurada" } };
+        return { status: 503, body: { error: UNAVAILABLE_PUBLIC_ERROR } };
       }
 
       const customerId = await deps.supabase.getStripeCustomerIdForUser(user.id);
@@ -118,14 +117,13 @@ export function buildStripeBillingUseCases(deps: {
         });
         return { status: 200, body: { url: session.url } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "portal failed";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "stripeBilling.createPortalSession");
       }
     },
 
     async syncSubscription(req) {
       if (!deps.stripe.hasStripe) {
-        return { status: 503, body: { error: "Stripe não configurado" } };
+        return { status: 503, body: { error: UNAVAILABLE_PUBLIC_ERROR } };
       }
       const { user, error: authErr } = await getUserFromBearer(deps.supabase, req);
       if (!user) {
@@ -155,8 +153,7 @@ export function buildStripeBillingUseCases(deps: {
           },
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "sync failed";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "stripeBilling.syncSubscription");
       }
     },
   };

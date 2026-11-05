@@ -72,3 +72,10 @@ export function isOllamaConnectionError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /Ollama|fetch failed|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|AbortError|timeout/i.test(msg);
 }
+
+/** Geração de IA abortada pelo nosso limite de tempo ("Ollama timeout após Ns", "OpenRouter chat timeout após Ns"). */
+export function isAiTimeoutError(err: unknown): boolean {
+  if (err instanceof Error && err.name === "AbortError") return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\btimeout após \d+s\b/i.test(msg);
+}

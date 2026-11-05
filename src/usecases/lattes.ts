@@ -2,6 +2,7 @@ import type { Request } from "express";
 import { fetch as undiciFetch } from "undici";
 import type { AuthUseCases } from "./auth.js";
 import { parseLattesPdfBase64 } from "../lib/lattesPdfParser.js";
+import { errorResponse } from "../http/errors.js";
 
 export type LattesUseCases = {
   parsePdf(req: Request): Promise<{ status: number; body: any }>;
@@ -33,8 +34,7 @@ export function buildLattesUseCases(deps: { auth: AuthUseCases }): LattesUseCase
         const parsed = await parseLattesPdfBase64(pdfBase64);
         return { status: 200, body: parsed };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao processar PDF";
-        return { status: 400, body: { error: msg } };
+        return errorResponse(e, "lattes.parsePdf", 400);
       }
     },
 

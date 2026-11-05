@@ -1,6 +1,7 @@
 import express from "express";
 import Stripe from "stripe";
 import { getServiceSupabase } from "../lib/stripeSubscriptionSync.js";
+import { toPublicError } from "../http/errors.js";
 
 const router = express.Router();
 
@@ -89,6 +90,7 @@ router.post("/stripe/create-checkout-session", async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: "subscription",
       payment_method_types: ["card"],
+      locale: "pt-BR",
       line_items: [{ price: priceId, quantity: 1 }],
       success_url: `${base}/dashboard?checkout=success`,
       cancel_url: `${base}/planos`,
@@ -109,8 +111,8 @@ router.post("/stripe/create-checkout-session", async (req, res) => {
     return res.json({ url: session.url });
   } catch (e) {
     console.error("create-checkout-session:", e);
-    const msg = e instanceof Error ? e.message : "checkout failed";
-    return res.status(500).json({ error: msg });
+    const publicMsg = toPublicError(e, { context: "stripe-billing.checkout", status: 500 }).message;
+    return res.status(500).json({ error: publicMsg });
   }
 });
 
@@ -148,12 +150,13 @@ router.post("/stripe/create-portal-session", async (req, res) => {
     const session = await stripe.billingPortal.sessions.create({
       customer: profile.stripe_customer_id,
       return_url: `${base}/perfil`,
+      locale: "pt-BR",
     });
     return res.json({ url: session.url });
   } catch (e) {
     console.error("create-portal-session:", e);
-    const msg = e instanceof Error ? e.message : "portal failed";
-    return res.status(500).json({ error: msg });
+    const publicMsg = toPublicError(e, { context: "stripe-billing.portal", status: 500 }).message;
+    return res.status(500).json({ error: publicMsg });
   }
 });
 

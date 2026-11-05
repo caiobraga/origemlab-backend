@@ -12,7 +12,20 @@ import {
   getAdaptFieldsTotal,
   seedCamposFromProjeto,
 } from "./gerarPropostaFromProjeto.js";
-import { isOllamaConnectionError } from "../infra/ollamaHealth.js";
+import { aiErrorResponse, errorResponse } from "../http/errors.js";
+import { extractTextFromPdfBuffer } from "../lib/lattesPdfParser.js";
+import { ollamaChatGenerate } from "../infra/ollama.js";
+import {
+  buildDraftPrompt,
+  buildExtractPrompt,
+  countFilledCampos,
+  EXTRACT_INPUT_MAX_CHARS,
+  normalizeArea,
+  normalizeOrigemTipo,
+  parseJsonObject,
+  sanitizeConteudo,
+  TEXTO_COMPLETO_MAX_CHARS,
+} from "./projetoIa.js";
 
 export type AppDataUseCases = {
   listEditais(req: Request): Promise<{ status: number; body: any }>;
@@ -42,6 +55,8 @@ export type AppDataUseCases = {
   matchProjetoEditais(req: Request): Promise<{ status: number; body: any }>;
   /** status 0 = resposta já enviada via stream NDJSON */
   gerarPropostaFromProjeto(req: Request, res?: Response): Promise<{ status: number; body: any }>;
+  extractProjetoFromPdf(req: Request): Promise<{ status: number; body: any }>;
+  draftProjetoConteudo(req: Request): Promise<{ status: number; body: any }>;
 };
 
 function normalizeUserType(raw: unknown): "pesquisador" | "consultor" {
@@ -107,7 +122,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao carregar editais";
         const status = msg.includes("SUPABASE_SERVICE_ROLE_KEY") ? 503 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.listEditais", status);
       }
     },
 
@@ -196,7 +211,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao criar proposta";
         const status = /empresa_id|projeto_id/i.test(msg) ? 400 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.createProposta", status);
       }
     },
 
@@ -239,7 +254,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao atualizar indicações";
         const status = /empresa_id/i.test(msg) ? 400 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.refreshIndicacoes", status);
       }
     },
 
@@ -260,8 +275,7 @@ export function buildAppDataUseCases(deps: {
         );
         return { status: 200, body: { rows } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao listar indicações";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.fetchIndicacoes");
       }
     },
 
@@ -280,6 +294,10 @@ export function buildAppDataUseCases(deps: {
       const patch = { ...((req as any).body || {}) };
       if (patch.user_type !== undefined) {
         patch.user_type = normalizeUserType(patch.user_type);
+        if (patch.user_type === "pesquisador") {
+          patch.has_cnpj = false;
+          patch.cnpj = null;
+        }
       }
       const row = await deps.supabase.updateProfile(loaded.ctx.userId, patch);
       return { status: 200, body: { row } };
@@ -298,8 +316,7 @@ export function buildAppDataUseCases(deps: {
       try {
         return await handleEditalChat(req, deps);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        return { status: 502, body: { error: msg } };
+        return aiErrorResponse(e, "appData.editalChat", 502);
       }
     },
 
@@ -310,7 +327,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao carregar estatísticas do catálogo";
         const status = msg.includes("SUPABASE_SERVICE_ROLE_KEY") ? 503 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.publicCatalogStats", status);
       }
     },
 
@@ -324,8 +341,7 @@ export function buildAppDataUseCases(deps: {
         const rows = await deps.supabase.listEmpresasForUser(loaded.ctx.userId);
         return { status: 200, body: { rows } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao listar empresas";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.listEmpresas");
       }
     },
 
@@ -361,8 +377,7 @@ export function buildAppDataUseCases(deps: {
         });
         return { status: 200, body: { row } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao criar empresa";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.createEmpresa");
       }
     },
 
@@ -378,8 +393,7 @@ export function buildAppDataUseCases(deps: {
         const row = await deps.supabase.updateEmpresaForUser(loaded.ctx.userId, id, (req as any).body || {});
         return { status: 200, body: { row } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao atualizar empresa";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.patchEmpresa");
       }
     },
 
@@ -395,8 +409,7 @@ export function buildAppDataUseCases(deps: {
         await deps.supabase.deleteEmpresaForUser(loaded.ctx.userId, id);
         return { status: 200, body: { ok: true } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao excluir empresa";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.deleteEmpresa");
       }
     },
 
@@ -408,8 +421,7 @@ export function buildAppDataUseCases(deps: {
         const rows = await deps.supabase.listProjetosForUser(loaded.ctx.userId, empresaId);
         return { status: 200, body: { rows } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao listar projetos";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.listProjetos");
       }
     },
 
@@ -458,7 +470,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao criar projeto";
         const status = /empresa_id/i.test(msg) ? 400 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.createProjeto", status);
       }
     },
 
@@ -477,7 +489,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao atualizar projeto";
         const status = /inválido|permissão/i.test(msg) ? 400 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.patchProjeto", status);
       }
     },
 
@@ -490,8 +502,91 @@ export function buildAppDataUseCases(deps: {
         await deps.supabase.deleteProjetoForUser(loaded.ctx.userId, id);
         return { status: 200, body: { ok: true } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao excluir projeto";
-        return { status: 500, body: { error: msg } };
+        return errorResponse(e, "appData.deleteProjeto");
+      }
+    },
+
+    async extractProjetoFromPdf(req) {
+      const loaded = await requireProSubscription(req, guardDeps, "ai_proposal");
+      if (!loaded.ok) return { status: loaded.status, body: loaded.body };
+
+      const uploaded = (req as any).file as { buffer?: Buffer } | undefined;
+      if (!uploaded?.buffer?.length) {
+        return { status: 400, body: { error: "Envie o PDF do projeto." } };
+      }
+
+      let fullText: string;
+      try {
+        fullText = await extractTextFromPdfBuffer(uploaded.buffer);
+      } catch (e) {
+        return errorResponse(e, "appData.extractProjetoFromPdf", 400);
+      }
+      if (fullText.length < 200) {
+        return {
+          status: 422,
+          body: { error: "Não conseguimos ler texto neste PDF. Se for uma digitalização, envie a versão com texto selecionável." },
+        };
+      }
+
+      try {
+        const raw = await ollamaChatGenerate(deps.config, buildExtractPrompt(fullText.slice(0, EXTRACT_INPUT_MAX_CHARS)), {
+          numPredict: 4000,
+          timeoutMs: 180_000,
+          temperature: 0,
+        });
+        const parsed = parseJsonObject(raw);
+        if (!parsed) {
+          return { status: 502, body: { error: "A IA não devolveu os campos em formato válido. Tente novamente." } };
+        }
+        const conteudo = sanitizeConteudo(parsed);
+        conteudo.texto_completo = fullText.slice(0, TEXTO_COMPLETO_MAX_CHARS);
+        const titulo = String(parsed.titulo || "").trim().slice(0, 300);
+        return {
+          status: 200,
+          body: {
+            titulo,
+            resumo: String(parsed.resumo || "").trim(),
+            area: normalizeArea(parsed.area),
+            conteudo,
+            campos_preenchidos: countFilledCampos(conteudo),
+          },
+        };
+      } catch (e) {
+        return aiErrorResponse(e, "appData.extractProjetoFromPdf");
+      }
+    },
+
+    async draftProjetoConteudo(req) {
+      const loaded = await requireProSubscription(req, guardDeps, "ai_proposal");
+      if (!loaded.ok) return { status: loaded.status, body: loaded.body };
+
+      const raw = ((req as any).body || {}) as Record<string, unknown>;
+      const input = {
+        titulo: String(raw.titulo || "").trim().slice(0, 300),
+        area: normalizeArea(raw.area),
+        origemTipo: normalizeOrigemTipo(raw.origem_tipo ?? raw.origemTipo),
+        origemDescricao: String(raw.origem_descricao ?? raw.origemDescricao ?? "").trim().slice(0, 300),
+        descricao: String(raw.descricao || "").trim().slice(0, 4000),
+        publicoAlvo: String(raw.publico_alvo ?? raw.publicoAlvo ?? "").trim().slice(0, 40),
+      };
+      if (!input.titulo && !input.descricao) {
+        return { status: 400, body: { error: "Informe ao menos o título ou uma descrição do projeto." } };
+      }
+
+      try {
+        const text = await ollamaChatGenerate(deps.config, buildDraftPrompt(input), {
+          numPredict: 4000,
+          timeoutMs: 180_000,
+          temperature: 0.3,
+        });
+        const parsed = parseJsonObject(text);
+        if (!parsed) {
+          return { status: 502, body: { error: "A IA não devolveu o rascunho em formato válido. Tente novamente." } };
+        }
+        const conteudo = sanitizeConteudo(parsed);
+        return { status: 200, body: { conteudo, campos_preenchidos: countFilledCampos(conteudo) } };
+      } catch (e) {
+        return aiErrorResponse(e, "appData.draftProjetoConteudo");
       }
     },
 
@@ -507,7 +602,7 @@ export function buildAppDataUseCases(deps: {
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao buscar editais";
         const status = /não encontrado/i.test(msg) ? 404 : 500;
-        return { status, body: { error: msg } };
+        return errorResponse(e, "appData.matchProjetoEditais", status);
       }
     },
 
@@ -648,14 +743,15 @@ export function buildAppDataUseCases(deps: {
         }
         return { status: 200, body };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao gerar proposta a partir do projeto";
-        const status = isOllamaConnectionError(e) ? 503 : 500;
+        const out = aiErrorResponse(e, "appData.gerarPropostaFromProjeto");
         if (stream) {
-          writeNdjson({ type: "error", error: msg });
+          // NDJSON: `error` é sempre o texto para o usuário; `code` identifica timeout da IA.
+          const { error, message } = out.body;
+          writeNdjson({ type: "error", error: message ?? error, ...(message ? { code: error } : {}) });
           res!.end();
           return { status: 0, body: null };
         }
-        return { status, body: { error: msg } };
+        return out;
       }
     },
   };

@@ -277,6 +277,23 @@ export function buildRouter(deps: {
     }),
   );
 
+  router.post(
+    "/api/projetos/extrair-pdf",
+    curriculumPdfUpload.single("file"),
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.extractProjetoFromPdf(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
+  router.post(
+    "/api/projetos/rascunho",
+    asyncRoute(async (req, res) => {
+      const out = await deps.app.draftProjetoConteudo(req);
+      res.status(out.status).json(out.body);
+    }),
+  );
+
   router.get(
     "/api/projetos/:id",
     asyncRoute(async (req, res) => {

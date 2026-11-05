@@ -2,10 +2,10 @@ import type { Request } from "express";
 import type { AppConfig } from "../config.js";
 import type { SupabaseGateway } from "../infra/gateways.js";
 import { ollamaChatGenerate, resolveFieldLlmOptions } from "../infra/ollama.js";
-import { isOllamaConnectionError } from "../infra/ollamaHealth.js";
 import { formatReferencesForPrompt, searchWeb, type WebSearchHit } from "../infra/webSearch.js";
 import type { AuthUseCases } from "./auth.js";
 import { requireProSubscription } from "./subscriptionGuard.js";
+import { aiErrorResponse } from "../http/errors.js";
 
 export type ProposalFieldAiUseCases = {
   generateFieldText(req: Request): Promise<{ status: number; body: any }>;
@@ -336,9 +336,7 @@ export function buildProposalFieldAiUseCases(deps: {
         const trimmed = finalizeFieldText(generated, parsed.body);
         return { status: 200, body: { generated_text: trimmed } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao gerar texto";
-        const status = isOllamaConnectionError(e) ? 503 : 500;
-        return { status, body: { error: msg } };
+        return aiErrorResponse(e, "proposalFieldAi.generateFieldText");
       }
     },
 
@@ -368,8 +366,7 @@ export function buildProposalFieldAiUseCases(deps: {
         const trimmed = finalizeFieldText(improved, parsed.body);
         return { status: 200, body: { improved_text: trimmed } };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao melhorar texto";
-        return { status: 500, body: { error: msg } };
+        return aiErrorResponse(e, "proposalFieldAi.improveText");
       }
     },
 
@@ -416,8 +413,7 @@ export function buildProposalFieldAiUseCases(deps: {
           },
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao analisar campo";
-        return { status: 500, body: { error: msg } };
+        return aiErrorResponse(e, "proposalFieldAi.analyzeField");
       }
     },
 
@@ -487,8 +483,8 @@ export function buildProposalFieldAiUseCases(deps: {
           },
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao embasar com referências";
-        return { status: 500, body: { error: msg, steps } };
+        const out = aiErrorResponse(e, "proposalFieldAi.groundFieldWithReferences");
+        return { status: out.status, body: { ...out.body, steps } };
       }
     },
   };

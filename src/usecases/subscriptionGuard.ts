@@ -10,6 +10,7 @@ import {
   type PlanTier,
 } from "../lib/subscriptionEntitlements.js";
 import { mergeProfileWithAuthSubscription } from "../lib/stripeSubscriptionSync.js";
+import { AUTH_UNAVAILABLE_PUBLIC_ERROR } from "../http/errors.js";
 
 export type SubscriptionContext = {
   userId: string;
@@ -35,9 +36,20 @@ export async function loadSubscriptionContext(
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg === "supabase_unreachable") {
-      return { ok: false, status: 503, body: { error: "supabase_unreachable" } };
+      return {
+        ok: false,
+        status: 503,
+        body: {
+          error: "supabase_unreachable",
+          message: AUTH_UNAVAILABLE_PUBLIC_ERROR,
+        },
+      };
     }
-    return { ok: false, status: 401, body: { error: "unauthenticated" } };
+    return {
+      ok: false,
+      status: 401,
+      body: { error: "unauthenticated", message: "Sua sessão expirou. Entre novamente." },
+    };
   }
 
   const profileRaw = (await deps.supabase.getProfile(userId)) || {};

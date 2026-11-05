@@ -215,7 +215,15 @@ export async function parseLattesPdfBase64(pdfBase64: string): Promise<LattesPar
     throw new Error("Arquivo não parece ser um PDF válido.");
   }
 
-  const text = await extractTextFromPdfBuffer(buffer);
+  let text: string;
+  try {
+    text = await extractTextFromPdfBuffer(buffer);
+  } catch (e) {
+    console.error("[lattes] falha ao extrair texto do PDF:", e);
+    throw new Error(
+      "Não foi possível ler o PDF. Baixe o PDF pelo Lattes (Exportar > PDF) e tente novamente.",
+    );
+  }
   if (text.length < 200) {
     throw new Error(
       "Não foi possível ler texto do PDF (pode ser escaneado/imagem). Baixe o PDF pelo Lattes (Exportar > PDF) e tente novamente.",

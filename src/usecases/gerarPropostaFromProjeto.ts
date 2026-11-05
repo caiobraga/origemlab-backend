@@ -1,7 +1,8 @@
 import type { AppConfig } from "../config.js";
 import type { SupabaseGateway } from "../infra/gateways.js";
 import { ollamaChatGenerate, resolveFieldLlmOptions } from "../infra/ollama.js";
-import { isOllamaConnectionError } from "../infra/ollamaHealth.js";
+import { isAiTimeoutError, isOllamaConnectionError } from "../infra/ollamaHealth.js";
+import { AI_TIMEOUT_PUBLIC_ERROR, GENERIC_PUBLIC_ERROR, UNAVAILABLE_PUBLIC_ERROR } from "../http/errors.js";
 
 type CampoPath = string; // dot path into campos_formulario
 
@@ -222,17 +223,47 @@ function flattenProjetoForPrompt(projeto: any): string {
     origem.tipo || origem.descricao
       ? `Origem: ${[origem.tipo, origem.descricao, origem.ano].filter(Boolean).join(" — ")}`
       : "",
+    c.titulo_ingles ? `Título (EN): ${c.titulo_ingles}` : "",
     Array.isArray(c.palavras_chave) && c.palavras_chave.length
-      ? `Palavras-chave: ${c.palavras_chave.join(", ")}`
+      ? `Palavras-chave (PT): ${c.palavras_chave.join(", ")}`
       : "",
+    Array.isArray(c.palavras_chave_ingles) && c.palavras_chave_ingles.length
+      ? `Palavras-chave (EN): ${c.palavras_chave_ingles.join(", ")}`
+      : "",
+    c.inicio_previsto ? `Início previsto: ${c.inicio_previsto}` : "",
+    c.duracao_meses ? `Duração (meses): ${c.duracao_meses}` : "",
     c.resumo_executivo ? `Resumo executivo:\n${c.resumo_executivo}` : "",
-    c.caracterizacao_problema ? `Problema/justificativa:\n${c.caracterizacao_problema}` : "",
+    c.caracterizacao_problema ? `Problema:\n${c.caracterizacao_problema}` : "",
     c.objetivo_geral ? `Objetivo geral:\n${c.objetivo_geral}` : "",
     c.objetivos_especificos ? `Objetivos específicos:\n${c.objetivos_especificos}` : "",
+    c.metas ? `Metas:\n${c.metas}` : "",
     c.metodologia ? `Metodologia:\n${c.metodologia}` : "",
+    c.gestao_execucao ? `Gestão da execução:\n${c.gestao_execucao}` : "",
     c.cronograma ? `Cronograma:\n${c.cronograma}` : "",
+    c.relevancia_setor_produtivo
+      ? `Relevância setor produtivo:\n${c.relevancia_setor_produtivo}`
+      : "",
+    c.atendimento_demandas_produtivas_sociais
+      ? `Atendimento a demandas produtivas/sociais:\n${c.atendimento_demandas_produtivas_sociais}`
+      : "",
     c.resultados_esperados ? `Resultados esperados:\n${c.resultados_esperados}` : "",
     c.impactos ? `Impactos:\n${c.impactos}` : "",
+    c.instituicoes_colaboradoras
+      ? `Instituições colaboradoras:\n${c.instituicoes_colaboradoras}`
+      : "",
+    c.financiamentos_anteriores
+      ? `Financiamentos anteriores:\n${c.financiamentos_anteriores}`
+      : "",
+    c.maturidade_tecnologica ? `Maturidade tecnológica:\n${c.maturidade_tecnologica}` : "",
+    c.resultados_ja_alcancados
+      ? `Resultados já alcançados:\n${c.resultados_ja_alcancados}`
+      : "",
+    c.potencial_producao_tecnologica
+      ? `Potencial produção tecnológica:\n${c.potencial_producao_tecnologica}`
+      : "",
+    c.potencial_empreendedorismo
+      ? `Potencial empreendedorismo:\n${c.potencial_empreendedorismo}`
+      : "",
     c.equipe ? `Equipe:\n${c.equipe}` : "",
     c.instituicoes ? `Instituições:\n${c.instituicoes}` : "",
     c.orcamento_estimado ? `Orçamento:\n${c.orcamento_estimado}` : "",
@@ -341,17 +372,58 @@ export function seedCamposFromProjeto(projeto: any): Record<string, any> {
         cronograma: {},
       }));
   }
-  campos.detalhamento_projeto.detalhamento_projeto = joinLines(c.metodologia, c.texto_completo);
-  campos.detalhamento_projeto.beneficios_resultados_esperados = String(c.resultados_esperados || "").trim();
+  campos.detalhamento_projeto.detalhamento_projeto = joinLines(
+    c.metodologia,
+    c.gestao_execucao,
+    c.metas ? `Metas:\n${c.metas}` : "",
+    c.texto_completo,
+  );
+  campos.detalhamento_projeto.beneficios_resultados_esperados = joinLines(
+    c.resultados_esperados,
+    c.resultados_ja_alcancados ? `Já alcançados:\n${c.resultados_ja_alcancados}` : "",
+  );
   campos.detalhamento_projeto.impactos_esperados.impacto_cientifico = String(c.impactos || "").trim();
+  campos.detalhamento_projeto.impactos_esperados.impacto_tecnologico = String(
+    c.potencial_producao_tecnologica || "",
+  ).trim();
+  campos.detalhamento_projeto.impactos_esperados.impacto_economico = String(
+    c.relevancia_setor_produtivo || "",
+  ).trim();
+  campos.detalhamento_projeto.impactos_esperados.impacto_social_ambiental = String(
+    c.atendimento_demandas_produtivas_sociais || "",
+  ).trim();
+  campos.detalhamento_projeto.caracterizacao_contribuicao_inovacao = joinLines(
+    c.maturidade_tecnologica,
+    c.potencial_empreendedorismo,
+  );
+  campos.detalhamento_projeto.potencial_fortalecimento_linha_pesquisa = String(
+    c.relevancia_setor_produtivo || "",
+  ).trim();
   campos.detalhamento_projeto.qualificacao_equipe = String(c.equipe || "").trim();
   campos.detalhamento_projeto.referencias = String(c.referencias || "").trim();
   campos.detalhamento_projeto.valor_projeto = String(c.orcamento_estimado || "").trim();
-  campos.detalhamento_projeto.infraestrutura_apoio_tecnico = joinLines(c.instituicoes, c.cronograma);
-  campos.detalhamento_projeto.promocao_popularizacao.publico_alvo = String(c.impactos || "").trim().slice(0, 800);
-  campos.coordenador_projeto.resumo_experiencia_profissional = String(c.equipe || "").trim().slice(0, 2000);
+  const duracao = parseInt(String(c.duracao_meses || "").replace(/\D/g, ""), 10);
+  if (Number.isFinite(duracao) && duracao > 0) {
+    campos.detalhamento_projeto.duracao_meses = duracao;
+  }
+  if (c.financiamentos_anteriores) {
+    campos.detalhamento_projeto.possui_outras_fontes_fomento = true;
+    campos.detalhamento_projeto.outras_fontes_fomento = String(c.financiamentos_anteriores).trim();
+  }
+  campos.detalhamento_projeto.infraestrutura_apoio_tecnico = joinLines(
+    c.instituicoes,
+    c.instituicoes_colaboradoras,
+    c.cronograma,
+  );
+  campos.detalhamento_projeto.promocao_popularizacao.publico_alvo = String(c.impactos || "")
+    .trim()
+    .slice(0, 800);
+  campos.coordenador_projeto.resumo_experiencia_profissional = String(c.equipe || "")
+    .trim()
+    .slice(0, 2000);
   if (c.instituicoes) {
-    campos.instituicao_executora.nome = String(c.instituicoes).split("—")[0]?.trim() || String(c.instituicoes);
+    campos.instituicao_executora.nome =
+      String(c.instituicoes).split("—")[0]?.trim() || String(c.instituicoes);
   }
   return campos;
 }
@@ -501,8 +573,14 @@ export async function adaptCamposWithAi(deps: {
         fieldsFailed.push({ field: field.name, error: "IA retornou vazio" });
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      fieldsFailed.push({ field: field.name, error: msg });
+      // `fields_failed` vai para o cliente: só mensagens públicas (detalhe técnico fica no log).
+      console.warn(`[gerarPropostaFromProjeto] campo "${field.name}":`, e instanceof Error ? e.message : e);
+      const publicError = isAiTimeoutError(e)
+        ? AI_TIMEOUT_PUBLIC_ERROR
+        : isOllamaConnectionError(e)
+          ? UNAVAILABLE_PUBLIC_ERROR
+          : GENERIC_PUBLIC_ERROR;
+      fieldsFailed.push({ field: field.name, error: publicError });
       if (isOllamaConnectionError(e)) break;
     }
   }

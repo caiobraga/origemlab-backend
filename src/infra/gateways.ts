@@ -392,6 +392,9 @@ function scoreProjetoContraEdital(projeto: any, edital: any): { score: number; m
   const palavras = Array.isArray(conteudo.palavras_chave)
     ? conteudo.palavras_chave.map(String)
     : [];
+  const palavrasEn = Array.isArray(conteudo.palavras_chave_ingles)
+    ? conteudo.palavras_chave_ingles.map(String)
+    : [];
   const projetoHay = normalizeIndicacaoText(
     [
       projeto?.titulo,
@@ -400,15 +403,29 @@ function scoreProjetoContraEdital(projeto: any, edital: any): { score: number; m
       projeto?.area,
       conteudo.origem?.tipo,
       conteudo.origem?.descricao,
+      conteudo.titulo_ingles,
       ...palavras,
+      ...palavrasEn,
+      conteudo.inicio_previsto,
+      conteudo.duracao_meses,
       conteudo.resumo_executivo,
       conteudo.caracterizacao_problema,
       conteudo.objetivo_geral,
       conteudo.objetivos_especificos,
+      conteudo.metas,
       conteudo.metodologia,
+      conteudo.gestao_execucao,
       conteudo.cronograma,
+      conteudo.relevancia_setor_produtivo,
+      conteudo.atendimento_demandas_produtivas_sociais,
       conteudo.resultados_esperados,
       conteudo.impactos,
+      conteudo.instituicoes_colaboradoras,
+      conteudo.financiamentos_anteriores,
+      conteudo.maturidade_tecnologica,
+      conteudo.resultados_ja_alcancados,
+      conteudo.potencial_producao_tecnologica,
+      conteudo.potencial_empreendedorismo,
       conteudo.equipe,
       conteudo.instituicoes,
       conteudo.orcamento_estimado,
@@ -557,6 +574,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
         payment_method_types: ["card"],
+        locale: "pt-BR",
         line_items: [{ price: input.priceId, quantity: 1 }],
         success_url: input.successUrl,
         cancel_url: input.cancelUrl,
@@ -580,6 +598,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       const session = await stripe.billingPortal.sessions.create({
         customer: input.customerId,
         return_url: input.returnUrl,
+        locale: "pt-BR",
       });
       return { url: session.url };
     },
@@ -844,7 +863,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         let q = supabase
           .from("editais_corretos")
           .select(
-            "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,validado_em,criado_em,atualizado_em",
+            "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,valor_bolsa,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,validado_em,criado_em,atualizado_em",
           )
           .order("validado_em", { ascending: false })
           .range(0, 999);
@@ -868,7 +887,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       let q = supabase
         .from("editais_corretos")
         .select(
-          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,validado_em,criado_em,atualizado_em",
+          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,valor_bolsa,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,validado_em,criado_em,atualizado_em",
           { count: "exact" },
         )
         .order("validado_em", { ascending: false });
@@ -902,7 +921,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       const { data, error } = await supabase
         .from("editais_corretos")
         .select(
-          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,sobre_programa,criterios_elegibilidade,localizacao,vagas,validado_em,criado_em,atualizado_em",
+          "id,numero,titulo,descricao,fonte,status,data_publicacao,data_encerramento,valor,valor_projeto,valor_bolsa,prazo_inscricao,area,orgao,link,is_researcher,is_company,timeline_estimada,sobre_programa,criterios_elegibilidade,localizacao,vagas,validado_em,criado_em,atualizado_em",
         )
         .eq("id", safeId)
         .maybeSingle();

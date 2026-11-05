@@ -4,6 +4,7 @@ import type { AppConfig } from "../config.js";
 import type { SessionStore } from "../infra/sessionStore.js";
 import type { AuthGateway } from "../infra/authGateway.js";
 import { clearCookie, getCookie, setHttpOnlyCookie } from "../http/cookies.js";
+import { errorResponse } from "../http/errors.js";
 
 function newSessionId() {
   return crypto.randomBytes(24).toString("base64url");
@@ -130,8 +131,8 @@ export function buildAuthUseCases(deps: {
           },
         };
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao fazer login";
-        return { status: 401, body: { error: msg } };
+        const status = isSupabaseNetworkError(e) ? 503 : 401;
+        return errorResponse(e, "auth.signIn", status);
       }
     },
 
@@ -170,8 +171,8 @@ export function buildAuthUseCases(deps: {
         (req as any).body = { email, password };
         return await this.signIn(req, res);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao criar conta";
-        return { status: 400, body: { error: msg } };
+        const status = isSupabaseNetworkError(e) ? 503 : 400;
+        return errorResponse(e, "auth.signUp", status);
       }
     },
 
