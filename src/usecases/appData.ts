@@ -465,6 +465,7 @@ export function buildAppDataUseCases(deps: {
           status: body.status ?? "rascunho",
           empresa_id: empresaId,
           conteudo: body.conteudo && typeof body.conteudo === "object" ? body.conteudo : {},
+          abrangencia_ufs: body.abrangencia_ufs,
         });
         return { status: 200, body: { row } };
       } catch (e) {
@@ -597,8 +598,8 @@ export function buildAppDataUseCases(deps: {
       if (!id) return { status: 400, body: { error: "id inválido" } };
       const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || "20"), 10) || 20));
       try {
-        const rows = await deps.supabase.matchEditaisForProjeto(loaded.ctx.userId, id, limit);
-        return { status: 200, body: { rows } };
+        const { rows, ocultos } = await deps.supabase.matchEditaisForProjeto(loaded.ctx.userId, id, limit);
+        return { status: 200, body: { rows, ocultos } };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao buscar editais";
         const status = /não encontrado/i.test(msg) ? 404 : 500;

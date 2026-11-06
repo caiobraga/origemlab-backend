@@ -4,6 +4,14 @@ import type { AppConfig } from "../config.js";
 import { createServerSupabaseClient } from "./supabaseClient.js";
 import { isEditalAtivoByDatePatterns } from "../lib/editalActiveByDatePatterns.js";
 import { computeArrecadacaoCatalogo } from "../lib/editalValorStats.js";
+import {
+  buildMatchCorpus,
+  dedupeMatchesByTitulo,
+  MIN_SCORE,
+  normalizeProjetoUfs,
+  projetoTermVector,
+  scoreProjetoEdital,
+} from "../lib/projetoEditalMatch.js";
 import { currentMonthKey, FREE_EDITAIS_PER_MONTH } from "../lib/subscriptionEntitlements.js";
 import { syncActiveSubscriptionForUser } from "../lib/stripeSubscriptionSync.js";
 
@@ -132,10 +140,15 @@ export type SupabaseGateway = {
     status?: string;
     empresa_id?: string | null;
     conteudo?: Record<string, unknown>;
+    abrangencia_ufs?: unknown;
   }): Promise<any>;
   updateProjetoForUser(userId: string, projetoId: string, patch: Record<string, any>): Promise<any>;
   deleteProjetoForUser(userId: string, projetoId: string): Promise<void>;
-  matchEditaisForProjeto(userId: string, projetoId: string, limit: number): Promise<any[]>;
+  matchEditaisForProjeto(
+    userId: string,
+    projetoId: string,
+    limit: number,
+  ): Promise<{ rows: any[]; ocultos: { total: number; regiao: number; prazo: number; publico: number; tema: number } }>;
   getReferralStats(userId: string): Promise<{ convites: number; conversoes: number; ganhos: number; potencial: number }>;
   fetchAiFieldContext(input: {
     editalId?: string;
@@ -178,6 +191,12 @@ const INDICACAO_AREA_TERMS: Record<string, string[]> = {
   energy: ["energia", "energético", "sustentável", "renovável", "bioenergia"],
   bio: ["bio", "biotecnologia", "biologia", "genética"],
 };
+
+/** `projetos.abrangencia_ufs`: null = nacional / sem restrição de UF. */
+function projetoUfsColumn(v: unknown): string[] | null {
+  const ufs = normalizeProjetoUfs(v);
+  return ufs.length ? ufs : null;
+}
 
 function normalizeIndicacaoText(v: unknown): string {
   return String(v ?? "")
@@ -251,7 +270,7 @@ function parseIndicacaoDate(v: unknown): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-function editalIndicacaoDeadline(row: any): Date | null {
+export function editalIndicacaoDeadline(row: any): Date | null {
   const timeline = typeof row.timeline_estimada === "string" ? (() => {
     try {
       return JSON.parse(row.timeline_estimada);
@@ -354,134 +373,6 @@ function scoreIndicacao(profile: any, edital: any): { score: number; motivos: st
     motivos.push("Possui informação de valor/financiamento");
   }
   if (edital.sobre_programa || edital.criterios_elegibilidade) score += 5;
-
-  const finalScore = Math.max(0, Math.min(100, Math.round(score)));
-  return { score: finalScore, motivos: [...new Set(motivos)].slice(0, 5) };
-}
-
-function scoreProjetoContraEdital(projeto: any, edital: any): { score: number; motivos: string[] } {
-  const motivos: string[] = [];
-  let score = 10;
-
-  const publico = String(projeto?.publico_alvo || "ambos");
-  if (publico === "pesquisador") {
-    if (edital.is_researcher === true) {
-      score += 40;
-      motivos.push("Edital alinhado a pesquisadores");
-    } else if (edital.is_researcher === false) {
-      score -= 40;
-      motivos.push("Edital não voltado a pesquisadores");
-    }
-  } else if (publico === "empresa") {
-    if (edital.is_company === true) {
-      score += 40;
-      motivos.push("Edital alinhado a empresas");
-    } else if (edital.is_company === false) {
-      score -= 40;
-      motivos.push("Edital não voltado a empresas");
-    }
-  } else {
-    if (edital.is_researcher === true || edital.is_company === true) {
-      score += 30;
-      motivos.push("Público do projeto compatível com o edital");
-    }
-  }
-
-  const projetoArea = String(projeto?.area || "").trim();
-  const conteudo = projeto?.conteudo && typeof projeto.conteudo === "object" ? projeto.conteudo : {};
-  const palavras = Array.isArray(conteudo.palavras_chave)
-    ? conteudo.palavras_chave.map(String)
-    : [];
-  const palavrasEn = Array.isArray(conteudo.palavras_chave_ingles)
-    ? conteudo.palavras_chave_ingles.map(String)
-    : [];
-  const projetoHay = normalizeIndicacaoText(
-    [
-      projeto?.titulo,
-      projeto?.resumo,
-      projeto?.objetivos,
-      projeto?.area,
-      conteudo.origem?.tipo,
-      conteudo.origem?.descricao,
-      conteudo.titulo_ingles,
-      ...palavras,
-      ...palavrasEn,
-      conteudo.inicio_previsto,
-      conteudo.duracao_meses,
-      conteudo.resumo_executivo,
-      conteudo.caracterizacao_problema,
-      conteudo.objetivo_geral,
-      conteudo.objetivos_especificos,
-      conteudo.metas,
-      conteudo.metodologia,
-      conteudo.gestao_execucao,
-      conteudo.cronograma,
-      conteudo.relevancia_setor_produtivo,
-      conteudo.atendimento_demandas_produtivas_sociais,
-      conteudo.resultados_esperados,
-      conteudo.impactos,
-      conteudo.instituicoes_colaboradoras,
-      conteudo.financiamentos_anteriores,
-      conteudo.maturidade_tecnologica,
-      conteudo.resultados_ja_alcancados,
-      conteudo.potencial_producao_tecnologica,
-      conteudo.potencial_empreendedorismo,
-      conteudo.equipe,
-      conteudo.instituicoes,
-      conteudo.orcamento_estimado,
-      conteudo.referencias,
-      conteudo.texto_completo,
-      // fallback: qualquer JSON legado
-      JSON.stringify(conteudo),
-    ]
-      .filter(Boolean)
-      .join(" "),
-  );
-  const editalHay = normalizeIndicacaoText(
-    [edital.area, edital.titulo, edital.descricao, edital.sobre_programa, edital.criterios_elegibilidade].join(" "),
-  );
-
-  if (projetoArea) {
-    const terms = INDICACAO_AREA_TERMS[projetoArea] || [projetoArea];
-    const matched = terms.find((t) => editalHay.includes(normalizeIndicacaoText(t)));
-    if (matched) {
-      score += 30;
-      motivos.push("Área do projeto alinhada ao edital");
-    }
-  }
-
-  // Sobreposição lexical simples (tokens >= 4 chars)
-  const tokens = [...new Set(projetoHay.split(/[^a-z0-9]+/).filter((t) => t.length >= 4))].slice(0, 80);
-  let hits = 0;
-  for (const t of tokens) {
-    if (editalHay.includes(t)) hits += 1;
-  }
-  if (hits >= 5) {
-    score += Math.min(30, hits * 2);
-    motivos.push("Conteúdo escrito do projeto compatível com o edital");
-  } else if (hits >= 3) {
-    score += Math.min(25, hits * 3);
-    motivos.push("Conteúdo do projeto compatível com o edital");
-  } else if (hits >= 1) {
-    score += hits * 4;
-  }
-
-  const deadline = editalIndicacaoDeadline(edital);
-  if (deadline) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const end = new Date(deadline);
-    end.setHours(23, 59, 59, 999);
-    if (end.getTime() >= today.getTime()) {
-      score += 15;
-      motivos.push("Prazo ainda aberto");
-    } else {
-      score -= 35;
-      motivos.push("Prazo possivelmente encerrado");
-    }
-  }
-
-  if (edital.valor_projeto || edital.valor) score += 5;
 
   const finalScore = Math.max(0, Math.min(100, Math.round(score)));
   return { score: finalScore, motivos: [...new Set(motivos)].slice(0, 5) };
@@ -1363,6 +1254,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
           publico_alvo: publico,
           status,
           conteudo: input.conteudo || {},
+          ...(input.abrangencia_ufs !== undefined ? { abrangencia_ufs: projetoUfsColumn(input.abrangencia_ufs) } : {}),
         })
         .select("*")
         .single();
@@ -1382,6 +1274,7 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
         }
         allowed.publico_alvo = patch.publico_alvo;
       }
+      if (patch.abrangencia_ufs !== undefined) allowed.abrangencia_ufs = projetoUfsColumn(patch.abrangencia_ufs);
       if (patch.status !== undefined) {
         if (!["rascunho", "ativo", "arquivado"].includes(String(patch.status))) {
           throw new Error("status inválido");
@@ -1422,22 +1315,39 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       const { data: editais, error } = await supabase
         .from("editais_corretos")
         .select(
-          "id,numero,titulo,descricao,data_encerramento,status,valor,valor_projeto,prazo_inscricao,area,orgao,fonte,link,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,criado_em,atualizado_em",
+          "id,numero,titulo,descricao,data_encerramento,status,valor,valor_projeto,prazo_inscricao,area,orgao,fonte,link,localizacao,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,criado_em,atualizado_em",
         )
         .order("validado_em", { ascending: false })
         .range(0, 499);
       if (error) throw new Error(error.message);
 
-      const ranked = (editais || [])
-        .map((edital: any) => {
-          const { score, motivos } = scoreProjetoContraEdital(projeto, edital);
-          return { score, motivos, edital };
-        })
-        .filter((r) => r.score >= 25)
-        .sort((a, b) => b.score - a.score)
-        .slice(0, limit);
-
-      return ranked;
+      const all = editais || [];
+      const corpus = buildMatchCorpus(all);
+      const projetoVec = projetoTermVector(projeto);
+      const ocultos = { total: 0, regiao: 0, prazo: 0, publico: 0, tema: 0 };
+      const ranked: Array<{ score: number; motivos: string[]; abrangencia: string[] | null; edital: any }> = [];
+      for (const edital of all) {
+        const r = scoreProjetoEdital(projeto, edital, corpus, {
+          deadline: editalIndicacaoDeadline(edital),
+          projetoVec,
+        });
+        if ("excluido" in r) {
+          ocultos.total += 1;
+          if (r.motivo.startsWith("Financia")) ocultos.regiao += 1;
+          else if (r.motivo.startsWith("Prazo")) ocultos.prazo += 1;
+          else if (r.motivo.startsWith("Edital voltado")) ocultos.publico += 1;
+          else ocultos.tema += 1;
+          continue;
+        }
+        if (r.score < MIN_SCORE) {
+          ocultos.total += 1;
+          ocultos.tema += 1;
+          continue;
+        }
+        ranked.push({ score: r.score, motivos: r.motivos, abrangencia: r.abrangencia, edital });
+      }
+      ranked.sort((a, b) => b.score - a.score);
+      return { rows: dedupeMatchesByTitulo(ranked).slice(0, limit), ocultos };
     },
 
     async getReferralStats(userId) {
