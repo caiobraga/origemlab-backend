@@ -13,6 +13,7 @@ import {
   seedCamposFromProjeto,
 } from "./gerarPropostaFromProjeto.js";
 import { aiErrorResponse, errorResponse } from "../http/errors.js";
+import { CRITERIOS_SELECAO_RESUMO } from "../lib/editalCriterios.js";
 import { extractTextFromPdfBuffer } from "../lib/lattesPdfParser.js";
 import { ollamaChatGenerate } from "../infra/ollama.js";
 import {
@@ -598,8 +599,13 @@ export function buildAppDataUseCases(deps: {
       if (!id) return { status: 400, body: { error: "id inválido" } };
       const limit = Math.min(50, Math.max(1, parseInt(String(req.query.limit || "20"), 10) || 20));
       try {
-        const { rows, ocultos } = await deps.supabase.matchEditaisForProjeto(loaded.ctx.userId, id, limit);
-        return { status: 200, body: { rows, ocultos } };
+        // Critérios de seleção da fundação são o filtro padrão; ?criterios=0 desliga.
+        const criterios = !/^(0|false|nao|não|off)$/i.test(String(req.query.criterios ?? "").trim());
+        const result = await deps.supabase.matchEditaisForProjeto(loaded.ctx.userId, id, limit, { criterios });
+        return {
+          status: 200,
+          body: { ...result, criterios_resumo: result.criterios ? CRITERIOS_SELECAO_RESUMO : [] },
+        };
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro ao buscar editais";
         const status = /não encontrado/i.test(msg) ? 404 : 500;

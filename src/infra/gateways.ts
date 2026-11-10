@@ -148,7 +148,12 @@ export type SupabaseGateway = {
     userId: string,
     projetoId: string,
     limit: number,
-  ): Promise<{ rows: any[]; ocultos: { total: number; regiao: number; prazo: number; publico: number; tema: number } }>;
+    opts?: { criterios?: boolean },
+  ): Promise<{
+    rows: any[];
+    ocultos: { total: number; regiao: number; prazo: number; publico: number; tema: number; criterios: number };
+    criterios: boolean;
+  }>;
   getReferralStats(userId: string): Promise<{ convites: number; conversoes: number; ganhos: number; potencial: number }>;
   fetchAiFieldContext(input: {
     editalId?: string;
@@ -1307,36 +1312,45 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
       if (error) throw new Error(error.message);
     },
 
-    async matchEditaisForProjeto(userId, projetoId, limit) {
+    async matchEditaisForProjeto(userId, projetoId, limit, opts) {
       if (!supabase) throw new Error("Servidor sem SUPABASE_SERVICE_ROLE_KEY.");
       const projeto = await this.getProjetoForUser(userId, projetoId);
       if (!projeto) throw new Error("Projeto não encontrado");
 
-      const { data: editais, error } = await supabase
-        .from("editais_corretos")
-        .select(
-          "id,numero,titulo,descricao,data_encerramento,status,valor,valor_projeto,prazo_inscricao,area,orgao,fonte,link,localizacao,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,criado_em,atualizado_em",
-        )
-        .order("validado_em", { ascending: false })
-        .range(0, 499);
+      const cols =
+        "id,numero,titulo,descricao,data_encerramento,status,valor,valor_projeto,prazo_inscricao,area,orgao,fonte,link,localizacao,is_researcher,is_company,sobre_programa,criterios_elegibilidade,timeline_estimada,criado_em,atualizado_em";
+      const fetchEditais = (select: string) =>
+        supabase
+          .from("editais_corretos")
+          .select(select)
+          .order("validado_em", { ascending: false })
+          .range(0, 499);
+      let { data: editais, error } = await fetchEditais(`${cols},perfil_execucao`);
+      // Antes de aplicar sql/20261110_editais_perfil_execucao.sql a coluna não existe: segue sem ela.
+      if (error && /perfil_execucao/.test(error.message)) ({ data: editais, error } = await fetchEditais(cols));
       if (error) throw new Error(error.message);
 
-      const all = editais || [];
+      const criterios = opts?.criterios !== false;
+      const all: any[] = editais || [];
       const corpus = buildMatchCorpus(all);
       const projetoVec = projetoTermVector(projeto);
-      const ocultos = { total: 0, regiao: 0, prazo: 0, publico: 0, tema: 0 };
-      const ranked: Array<{ score: number; motivos: string[]; abrangencia: string[] | null; edital: any }> = [];
+      const ocultos = { total: 0, regiao: 0, prazo: 0, publico: 0, tema: 0, criterios: 0 };
+      const ranked: Array<{
+        score: number;
+        motivos: string[];
+        alertas: string[];
+        abrangencia: string[] | null;
+        edital: any;
+      }> = [];
       for (const edital of all) {
         const r = scoreProjetoEdital(projeto, edital, corpus, {
           deadline: editalIndicacaoDeadline(edital),
           projetoVec,
+          criterios,
         });
         if ("excluido" in r) {
           ocultos.total += 1;
-          if (r.motivo.startsWith("Financia")) ocultos.regiao += 1;
-          else if (r.motivo.startsWith("Prazo")) ocultos.prazo += 1;
-          else if (r.motivo.startsWith("Edital voltado")) ocultos.publico += 1;
-          else ocultos.tema += 1;
+          ocultos[r.categoria] += 1;
           continue;
         }
         if (r.score < MIN_SCORE) {
@@ -1344,10 +1358,11 @@ export function buildGateways(config: AppConfig): { stripe: StripeGateway; supab
           ocultos.tema += 1;
           continue;
         }
-        ranked.push({ score: r.score, motivos: r.motivos, abrangencia: r.abrangencia, edital });
+        const { perfil_execucao: _perfil, ...rest } = edital;
+        ranked.push({ score: r.score, motivos: r.motivos, alertas: r.alertas, abrangencia: r.abrangencia, edital: rest });
       }
       ranked.sort((a, b) => b.score - a.score);
-      return { rows: dedupeMatchesByTitulo(ranked).slice(0, limit), ocultos };
+      return { rows: dedupeMatchesByTitulo(ranked).slice(0, limit), ocultos, criterios };
     },
 
     async getReferralStats(userId) {

@@ -3,6 +3,8 @@
  * e relevância temática (TF-IDF sobre o catálogo de editais carregado).
  */
 
+import { avaliarCriteriosSelecao } from "./editalCriterios.js";
+
 export const UFS = [
   "AC", "AL", "AP", "AM", "BA", "CE", "DF", "ES", "GO", "MA", "MT", "MS", "MG", "PA",
   "PB", "PR", "PE", "PI", "RJ", "RN", "RS", "RO", "RR", "SC", "SP", "SE", "TO",
@@ -308,13 +310,19 @@ const AREA_TERMS: Record<string, string[]> = {
 export type ProjetoEditalMatch = {
   score: number;
   motivos: string[];
+  /** Pontos a confirmar no edital (critérios de seleção sem dado ou só recomendados). */
+  alertas: string[];
   /** Temas em comum (palavras do edital) — base do "por que apareceu". */
   termos: string[];
   /** UFs onde o edital financia; null = nacional. */
   abrangencia: Uf[] | null;
 };
 
-export type MatchExclusao = { excluido: true; motivo: string };
+export type MatchExclusao = {
+  excluido: true;
+  motivo: string;
+  categoria: "regiao" | "prazo" | "publico" | "tema" | "criterios";
+};
 
 /** Similaridade mínima (cosseno TF-IDF) para considerar o edital temático. */
 export const MIN_SIMILARIDADE = 0.08;
@@ -325,7 +333,7 @@ export function scoreProjetoEdital(
   projeto: any,
   edital: any,
   corpus: MatchCorpus,
-  opts: { deadline: Date | null; today?: Date; projetoVec?: Vec },
+  opts: { deadline: Date | null; today?: Date; projetoVec?: Vec; criterios?: boolean },
 ): ProjetoEditalMatch | MatchExclusao {
   const motivos: string[] = [];
 
@@ -334,7 +342,9 @@ export function scoreProjetoEdital(
   const abr = inferEditalAbrangencia(edital);
   if (projetoUfs.length && abr.ufs) {
     const inter = abr.ufs.filter((u) => projetoUfs.includes(u));
-    if (!inter.length) return { excluido: true, motivo: `Financia apenas em ${abr.ufs.join(", ")}` };
+    if (!inter.length) {
+      return { excluido: true, motivo: `Financia apenas em ${abr.ufs.join(", ")}`, categoria: "regiao" };
+    }
     motivos.push(`Financia em ${inter.join(", ")}`);
   } else if (projetoUfs.length && !abr.ufs) {
     motivos.push("Edital de abrangência nacional");
@@ -347,16 +357,20 @@ export function scoreProjetoEdital(
   if (opts.deadline) {
     const end = new Date(opts.deadline);
     end.setHours(23, 59, 59, 999);
-    if (end.getTime() < today.getTime()) return { excluido: true, motivo: "Prazo encerrado" };
+    if (end.getTime() < today.getTime()) return { excluido: true, motivo: "Prazo encerrado", categoria: "prazo" };
     prazoAberto = true;
   }
+
+  // 2b) Critérios de seleção (filtro padrão; desligável)
+  const criterios = opts.criterios ? avaliarCriteriosSelecao(edital) : null;
+  if (criterios?.excluido) return { excluido: true, motivo: criterios.motivo, categoria: "criterios" };
 
   // 3) Público
   const publico = String(projeto?.publico_alvo || "ambos");
   let score = 0;
   if (publico === "pesquisador") {
     if (edital.is_researcher === false && edital.is_company === true) {
-      return { excluido: true, motivo: "Edital voltado a empresas" };
+      return { excluido: true, motivo: "Edital voltado a empresas", categoria: "publico" };
     }
     if (edital.is_researcher === true) {
       score += 10;
@@ -364,7 +378,7 @@ export function scoreProjetoEdital(
     }
   } else if (publico === "empresa") {
     if (edital.is_company === false && edital.is_researcher === true) {
-      return { excluido: true, motivo: "Edital voltado a pesquisadores" };
+      return { excluido: true, motivo: "Edital voltado a pesquisadores", categoria: "publico" };
     }
     if (edital.is_company === true) {
       score += 10;
@@ -385,7 +399,11 @@ export function scoreProjetoEdital(
   const areaHit = areaTerms.some((t) => editalHay.includes(t));
 
   if (sim < MIN_SIMILARIDADE && !(areaHit && sim >= MIN_SIMILARIDADE * 0.75)) {
-    return { excluido: true, motivo: `Tema pouco relacionado (similaridade ${sim.toFixed(3)})` };
+    return {
+      excluido: true,
+      motivo: `Tema pouco relacionado (similaridade ${sim.toFixed(3)})`,
+      categoria: "tema",
+    };
   }
 
   // sim ~0.08 (fraco) … ~0.25+ (forte) → ~10..70
@@ -403,9 +421,18 @@ export function scoreProjetoEdital(
   const termos = displayTerms(shared.slice(0, 8).map(([t]) => t), edital).slice(0, 5);
   if (termos.length) motivos.unshift(`Temas em comum: ${termos.join(", ")}`);
 
+  const alertas: string[] = [];
+  if (criterios && !criterios.excluido) {
+    score += criterios.pontos;
+    // Critérios atendidos logo após o tema: são o que a fundação olha primeiro.
+    motivos.splice(termos.length ? 1 : 0, 0, ...criterios.motivos);
+    alertas.push(...criterios.alertas);
+  }
+
   return {
     score: Math.max(0, Math.min(100, score)),
-    motivos: [...new Set(motivos)].slice(0, 5),
+    motivos: [...new Set(motivos)].slice(0, criterios ? 7 : 5),
+    alertas,
     termos,
     abrangencia: abr.ufs,
   };
